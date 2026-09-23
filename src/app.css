@@ -271,6 +271,14 @@ a {
   line-height: 1.4;
 }
 
+.data-warning {
+  max-width: 360px;
+  margin: 14px auto 0;
+  color: #ffd2b8;
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
 .debug-toggle {
   margin-top: 24px;
   padding: 6px 0;

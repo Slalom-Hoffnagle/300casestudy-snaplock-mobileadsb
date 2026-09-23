@@ -7,6 +7,7 @@
     smoothLinear,
     type SensorReading,
   } from './lib/sensors'
+  import { AdsbError, fetchNearbyAircraft, type Aircraft } from './lib/adsb'
 
   type AppPhase = 'welcome' | 'camera' | 'location' | 'motion' | 'ready' | 'denied'
 
@@ -28,7 +29,21 @@
     latitude: null,
     longitude: null,
   }
+  let aircraft: Aircraft[] = []
+  let adsbState: 'idle' | 'loading' | 'fresh' | 'error' = 'idle'
+  let adsbError = ''
+  let lastAdsbUpdate: number | null = null
+  let currentTime = Date.now()
+  let adsbTimer: number | null = null
+  let adsbClock: number | null = null
+  let adsbAbortController: AbortController | null = null
+  let adsbRequestInFlight = false
+  let adsbRetryDelay = 3000
+  const adsbRadiusNm = 50
   const isDev = import.meta.env.DEV
+
+  $: adsbIsStale = lastAdsbUpdate !== null && currentTime - lastAdsbUpdate > 15000
+  $: adsbAgeSeconds = lastAdsbUpdate === null ? null : Math.max(0, Math.floor((currentTime - lastAdsbUpdate) / 1000))
 
   const phaseCopy: Record<Exclude<AppPhase, 'welcome' | 'ready' | 'denied'>, string> = {
     camera: 'Camera access lets SnapLock see the sky through your phone.',
@@ -121,6 +136,7 @@
       await tick()
       if (videoElement && cameraStream) videoElement.srcObject = cameraStream
       await videoElement?.play()
+      startAdsbPolling()
     } catch (error) {
       cameraStream?.getTracks().forEach((track) => track.stop())
       cameraStream = null
@@ -137,11 +153,89 @@
     enableSensors()
   }
 
+  function scheduleAdsbPoll(delay = 0) {
+    if (adsbTimer !== null) window.clearTimeout(adsbTimer)
+    adsbTimer = window.setTimeout(pollAdsb, delay)
+  }
+
+  async function pollAdsb() {
+    if (document.hidden || adsbRequestInFlight) return
+    if (latitude === null || longitude === null) {
+      scheduleAdsbPoll(1000)
+      return
+    }
+
+    adsbRequestInFlight = true
+    adsbAbortController = new AbortController()
+    if (lastAdsbUpdate === null) adsbState = 'loading'
+
+    try {
+      const result = await fetchNearbyAircraft(latitude, longitude, adsbRadiusNm, adsbAbortController.signal)
+      aircraft = result
+      lastAdsbUpdate = Date.now()
+      currentTime = lastAdsbUpdate
+      adsbState = 'fresh'
+      adsbError = ''
+      adsbRetryDelay = 3000
+      if (isDev) console.info(`[SnapLock] ADS-B aircraft: ${aircraft.length}`)
+      scheduleAdsbPoll(3000)
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') return
+      adsbState = 'error'
+      adsbError = error instanceof AdsbError ? error.message : 'Unable to reach the ADS-B service.'
+      adsbRetryDelay = error instanceof AdsbError && error.status === 429
+        ? Math.min(30000, adsbRetryDelay * 2)
+        : Math.min(30000, Math.max(6000, adsbRetryDelay * 2))
+      scheduleAdsbPoll(adsbRetryDelay)
+    } finally {
+      adsbRequestInFlight = false
+    }
+  }
+
+  function startAdsbPolling() {
+    adsbClock = window.setInterval(() => {
+      currentTime = Date.now()
+    }, 1000)
+    scheduleAdsbPoll()
+  }
+
+  function stopAdsbPolling() {
+    if (adsbTimer !== null) window.clearTimeout(adsbTimer)
+    if (adsbClock !== null) window.clearInterval(adsbClock)
+    adsbAbortController?.abort()
+    adsbRequestInFlight = false
+    adsbTimer = null
+    adsbClock = null
+    adsbAbortController = null
+  }
+
+  function handleVisibilityChange() {
+    if (document.hidden) {
+      if (adsbTimer !== null) window.clearTimeout(adsbTimer)
+      if (adsbClock !== null) window.clearInterval(adsbClock)
+      adsbTimer = null
+      adsbClock = null
+      adsbAbortController?.abort()
+      return
+    }
+
+    if (appPhase === 'ready') {
+      adsbClock = window.setInterval(() => {
+        currentTime = Date.now()
+      }, 1000)
+      scheduleAdsbPoll()
+    }
+  }
+
   onDestroy(() => {
     cameraStream?.getTracks().forEach((track) => track.stop())
     if (locationWatchId !== null) navigator.geolocation.clearWatch(locationWatchId)
     window.removeEventListener('deviceorientation', handleOrientation)
+    document.removeEventListener('visibilitychange', handleVisibilityChange)
+    stopAdsbPolling()
   })
+
+  document.addEventListener('visibilitychange', handleVisibilityChange)
 </script>
 
 <svelte:head>
@@ -195,7 +289,13 @@
       <div class="sensor-readout">
         <span><i class:active={orientationAvailable}></i> Motion {orientationAvailable ? 'ready' : 'unavailable'}</span>
         <span><i class:active={locationAccuracy !== null}></i> GPS {locationAccuracy ? `${Math.round(locationAccuracy)}m` : 'locating'}</span>
+        <span><i class:active={adsbState === 'fresh' && !adsbIsStale}></i> ADS-B {adsbState === 'loading' ? 'loading' : `${aircraft.length} nearby`}</span>
       </div>
+      {#if adsbIsStale}
+        <p class="data-warning">ADS-B data is {adsbAgeSeconds}s old. Showing the last successful result.</p>
+      {:else if adsbState === 'error'}
+        <p class="data-warning">{adsbError}</p>
+      {/if}
       {#if locationAccuracy !== null && locationAccuracy > 100}
         <p class="accuracy-warning">GPS accuracy is limited. Move outdoors for a better fix.</p>
       {/if}
