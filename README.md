@@ -22,6 +22,10 @@ Polling is single-flight: a new request cannot overlap an active request. It pau
 
 `src/lib/positioning.worker.ts` keeps screen-space math off the main thread. Each frame it dead-reckons aircraft forward from speed and track, computes haversine distance and bearing, derives elevation from reported altitude, maps offsets through the default 60° by 45° FOV, and returns clamped edge coordinates for aircraft outside the frame. Worker requests are single-flight and pause when the page is hidden; M6 consumes the returned positions for rendering.
 
+## M6 Overlay Rendering
+
+The ready state adds a device-pixel-ratio-aware canvas above the camera. In-frame aircraft render as animated targeting reticles with callsign/elevation labels; the six nearest off-screen aircraft render as directional edge arrows. The canvas uses `requestAnimationFrame`, clears on every frame, and pauses when the page is hidden.
+
 ## Development
 
 Requires Node.js 20.19+ or 22.12+.

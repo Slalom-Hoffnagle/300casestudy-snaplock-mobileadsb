@@ -44,6 +44,10 @@
   let positioningRequestInFlight = false
   let aircraftPositions: AircraftPosition[] = []
   let positioningComputedAt: number | null = null
+  let overlayCanvas: HTMLCanvasElement | undefined
+  let overlayFrame: number | null = null
+  let overlayContext: CanvasRenderingContext2D | null = null
+  const markerBirths = new Map<string, number>()
   let adsbRetryDelay = 3000
   const adsbRadiusNm = 50
   const isDev = import.meta.env.DEV
@@ -145,6 +149,7 @@
       await videoElement?.play()
       startAdsbPolling()
       startPositioning()
+      startOverlay()
     } catch (error) {
       cameraStream?.getTracks().forEach((track) => track.stop())
       cameraStream = null
@@ -288,6 +293,110 @@
     positioningRequestInFlight = false
   }
 
+  function resizeOverlay() {
+    if (!overlayCanvas) return
+    const pixelRatio = Math.min(window.devicePixelRatio || 1, 2)
+    const width = window.innerWidth
+    const height = window.innerHeight
+    if (overlayCanvas.width !== width * pixelRatio || overlayCanvas.height !== height * pixelRatio) {
+      overlayCanvas.width = width * pixelRatio
+      overlayCanvas.height = height * pixelRatio
+      overlayCanvas.style.width = `${width}px`
+      overlayCanvas.style.height = `${height}px`
+      overlayContext = overlayCanvas.getContext('2d')
+      overlayContext?.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0)
+    }
+  }
+
+  function drawReticle(context: CanvasRenderingContext2D, position: AircraftPosition, time: number) {
+    const bornAt = markerBirths.get(position.icao24) ?? time
+    markerBirths.set(position.icao24, bornAt)
+    const entrance = Math.min(1, (time - bornAt) / 220)
+    const scale = 0.78 + 0.22 * entrance
+    const size = position.size * scale
+    const half = size / 2
+    const corner = size * 0.3
+    context.save()
+    context.translate(position.x, position.y)
+    context.globalAlpha = position.opacity
+    context.strokeStyle = '#b9f23d'
+    context.lineWidth = 2
+    context.shadowColor = 'rgba(185, 242, 61, 0.6)'
+    context.shadowBlur = 8
+    context.beginPath()
+    context.moveTo(-half, -half + corner)
+    context.lineTo(-half, -half)
+    context.lineTo(-half + corner, -half)
+    context.moveTo(half - corner, -half)
+    context.lineTo(half, -half)
+    context.lineTo(half, -half + corner)
+    context.moveTo(-half, half - corner)
+    context.lineTo(-half, half)
+    context.lineTo(-half + corner, half)
+    context.moveTo(half - corner, half)
+    context.lineTo(half, half)
+    context.lineTo(half, half - corner)
+    context.stroke()
+    context.shadowBlur = 0
+    context.fillStyle = '#ffffff'
+    context.font = '700 11px "Avenir Next", sans-serif'
+    context.textAlign = 'center'
+    context.fillText(`${position.callsign}  ${Math.round(position.elevation)}°`, 0, -half - 9)
+    context.restore()
+  }
+
+  function drawEdgeArrow(context: CanvasRenderingContext2D, position: AircraftPosition) {
+    const angle = Math.atan2(position.y - window.innerHeight / 2, position.x - window.innerWidth / 2)
+    const x = position.edgeX
+    const y = position.edgeY
+    context.save()
+    context.translate(x, y)
+    context.rotate(angle)
+    context.globalAlpha = position.opacity
+    context.fillStyle = '#b9f23d'
+    context.shadowColor = 'rgba(185, 242, 61, 0.65)'
+    context.shadowBlur = 8
+    context.beginPath()
+    context.moveTo(12, 0)
+    context.lineTo(-7, -7)
+    context.lineTo(-3, 0)
+    context.lineTo(-7, 7)
+    context.closePath()
+    context.fill()
+    context.restore()
+  }
+
+  function renderOverlay(time: number) {
+    overlayFrame = null
+    if (!overlayCanvas || document.hidden) return
+    resizeOverlay()
+    const context = overlayContext
+    if (!context) return
+    context.clearRect(0, 0, window.innerWidth, window.innerHeight)
+    const offscreen = aircraftPositions
+      .filter((position) => !position.inFov)
+      .sort((left, right) => left.distance - right.distance)
+      .slice(0, 6)
+    offscreen.forEach((position) => drawEdgeArrow(context, position))
+    aircraftPositions.filter((position) => position.inFov).forEach((position) => drawReticle(context, position, time))
+    const activeIds = new Set(aircraftPositions.map((position) => position.icao24))
+    markerBirths.forEach((_, id) => {
+      if (!activeIds.has(id)) markerBirths.delete(id)
+    })
+    overlayFrame = window.requestAnimationFrame(renderOverlay)
+  }
+
+  function startOverlay() {
+    resizeOverlay()
+    if (overlayFrame === null) overlayFrame = window.requestAnimationFrame(renderOverlay)
+  }
+
+  function stopOverlay() {
+    if (overlayFrame !== null) window.cancelAnimationFrame(overlayFrame)
+    overlayFrame = null
+    overlayContext = null
+  }
+
   function handleVisibilityChange() {
     if (document.hidden) {
       if (adsbTimer !== null) window.clearTimeout(adsbTimer)
@@ -297,6 +406,8 @@
       adsbAbortController?.abort()
       if (positioningFrame !== null) window.cancelAnimationFrame(positioningFrame)
       positioningFrame = null
+      if (overlayFrame !== null) window.cancelAnimationFrame(overlayFrame)
+      overlayFrame = null
       return
     }
 
@@ -306,6 +417,7 @@
       }, 1000)
       scheduleAdsbPoll()
       schedulePositioningFrame()
+      startOverlay()
     }
   }
 
@@ -316,6 +428,7 @@
     document.removeEventListener('visibilitychange', handleVisibilityChange)
     stopAdsbPolling()
     stopPositioning()
+    stopOverlay()
   })
 
   document.addEventListener('visibilitychange', handleVisibilityChange)
@@ -331,6 +444,7 @@
 <main class="scanner-shell">
   {#if appPhase === 'ready' && cameraStream}
     <video class="camera-feed" bind:this={videoElement} autoplay muted playsinline></video>
+    <canvas class="overlay-canvas" bind:this={overlayCanvas} aria-label="Aircraft position overlay"></canvas>
   {/if}
   <div class="sky" aria-hidden="true"></div>
   <div class="scrim" aria-hidden="true"></div>
