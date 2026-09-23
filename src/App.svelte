@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy, tick } from 'svelte'
+  import { onDestroy, onMount, tick } from 'svelte'
   import {
     applyDeclination,
     magneticDeclination,
@@ -48,13 +48,85 @@
   let overlayFrame: number | null = null
   let overlayContext: CanvasRenderingContext2D | null = null
   const markerBirths = new Map<string, number>()
+  let selectedAircraft: Aircraft | null = null
+  let selectedPosition: AircraftPosition | null = null
+  let settingsOpen = false
+  let settings = {
+    radiusNm: 50,
+    distanceUnit: 'nm',
+    altitudeUnit: 'ft',
+    horizontalFov: 60,
+    verticalFov: 45,
+  }
   let adsbRetryDelay = 3000
-  const adsbRadiusNm = 50
+  let adsbRadiusNm = settings.radiusNm
   const isDev = import.meta.env.DEV
 
   $: adsbIsStale = lastAdsbUpdate !== null && currentTime - lastAdsbUpdate > 15000
   $: adsbAgeSeconds = lastAdsbUpdate === null ? null : Math.max(0, Math.floor((currentTime - lastAdsbUpdate) / 1000))
   $: inFovCount = aircraftPositions.filter((position) => position.inFov).length
+
+  function loadSettings() {
+    try {
+      const stored = localStorage.getItem('snaplock-settings')
+      if (!stored) return
+      const parsed = JSON.parse(stored) as Partial<typeof settings>
+      settings = { ...settings, ...parsed }
+      adsbRadiusNm = settings.radiusNm
+    } catch {
+      // Ignore malformed local settings and keep defaults.
+    }
+  }
+
+  function saveSettings() {
+    adsbRadiusNm = settings.radiusNm
+    localStorage.setItem('snaplock-settings', JSON.stringify(settings))
+    if (appPhase === 'ready') scheduleAdsbPoll()
+  }
+
+  function closePanels() {
+    selectedAircraft = null
+    selectedPosition = null
+    settingsOpen = false
+  }
+
+  function formatAltitude(altitude: number | null) {
+    if (altitude === null) return 'Altitude unavailable'
+    if (settings.altitudeUnit === 'm') return `${Math.round(altitude * 0.3048).toLocaleString()} m`
+    return `${Math.round(altitude).toLocaleString()} ft`
+  }
+
+  function formatSpeed(speed: number | null) {
+    if (speed === null) return 'Speed unavailable'
+    if (settings.distanceUnit === 'km') return `${Math.round(speed * 1.852)} km/h`
+    if (settings.distanceUnit === 'mi') return `${Math.round(speed * 1.15078)} mph`
+    return `${Math.round(speed)} kt`
+  }
+
+  function selectPosition(position: AircraftPosition) {
+    selectedPosition = position
+    selectedAircraft = aircraft.find((item) => item.icao24 === position.icao24) ?? null
+  }
+
+  function handleOverlayClick(event: MouseEvent) {
+    if (!overlayCanvas) return
+    const bounds = overlayCanvas.getBoundingClientRect()
+    const x = event.clientX - bounds.left
+    const y = event.clientY - bounds.top
+    const inFrame = aircraftPositions
+      .filter((position) => position.inFov)
+      .find((position) => Math.hypot(position.x - x, position.y - y) <= position.size)
+    if (inFrame) {
+      selectPosition(inFrame)
+      return
+    }
+    const edge = aircraftPositions
+      .filter((position) => !position.inFov)
+      .sort((left, right) => left.distance - right.distance)
+      .slice(0, 6)
+      .find((position) => Math.hypot(position.edgeX - x, position.edgeY - y) <= 28)
+    if (edge) selectPosition(edge)
+  }
 
   const phaseCopy: Record<Exclude<AppPhase, 'welcome' | 'ready' | 'denied'>, string> = {
     camera: 'Camera access lets SnapLock see the sky through your phone.',
@@ -245,8 +317,8 @@
       viewport: {
         width: window.innerWidth,
         height: window.innerHeight,
-        horizontalFov: 60,
-        verticalFov: 45,
+        horizontalFov: settings.horizontalFov,
+        verticalFov: settings.verticalFov,
       },
       now: Date.now(),
     }
@@ -431,6 +503,7 @@
     stopOverlay()
   })
 
+  onMount(loadSettings)
   document.addEventListener('visibilitychange', handleVisibilityChange)
 </script>
 
@@ -444,7 +517,7 @@
 <main class="scanner-shell">
   {#if appPhase === 'ready' && cameraStream}
     <video class="camera-feed" bind:this={videoElement} autoplay muted playsinline></video>
-    <canvas class="overlay-canvas" bind:this={overlayCanvas} aria-label="Aircraft position overlay"></canvas>
+    <canvas class="overlay-canvas" bind:this={overlayCanvas} onclick={handleOverlayClick} aria-label="Aircraft position overlay"></canvas>
   {/if}
   <div class="sky" aria-hidden="true"></div>
   <div class="scrim" aria-hidden="true"></div>
@@ -454,6 +527,7 @@
       <img src="/snaplock-mark.svg" width="36" height="36" alt="" />
       <span>SnapLock</span>
     </a>
+    <button class="settings-button" type="button" aria-label="Open settings" onclick={() => (settingsOpen = true)}>⚙</button>
     <span class="status"><i></i> {appPhase === 'ready' ? 'Sensors online' : 'Ready when you are'}</span>
   </header>
 
@@ -464,7 +538,7 @@
       <h1 id="welcome-title">Look up.<br />Lock on.</h1>
       {#if appPhase === 'denied'}
         <div class="permission-error" role="alert">{errorMessage}</div>
-        <button class="primary-action" type="button" on:click={retryPermissions}>Try permissions again</button>
+        <button class="primary-action" type="button" onclick={retryPermissions}>Try permissions again</button>
       {:else}
         <p class="lede">SnapLock needs three permissions to place aircraft in your view.</p>
         <div class="permission-list" aria-label="Required permissions">
@@ -472,7 +546,7 @@
           <span><b>02</b> Location</span>
           <span><b>03</b> Motion</span>
         </div>
-        <button class="primary-action" type="button" on:click={enableSensors}>Enable sensors <span aria-hidden="true">↗</span></button>
+        <button class="primary-action" type="button" onclick={enableSensors}>Enable sensors <span aria-hidden="true">↗</span></button>
       {/if}
     </section>
   {:else if appPhase === 'ready'}
@@ -498,7 +572,7 @@
         <p class="accuracy-warning">GPS accuracy is limited. Move outdoors for a better fix.</p>
       {/if}
       {#if isDev}
-        <button class="debug-toggle" type="button" on:click={() => (debugEnabled = !debugEnabled)}>
+        <button class="debug-toggle" type="button" onclick={() => (debugEnabled = !debugEnabled)}>
           {debugEnabled ? 'Hide sensor data' : 'Show sensor data'}
         </button>
         {#if debugEnabled}
@@ -528,4 +602,88 @@
     </div>
     <a href="https://adsb.fi" target="_blank" rel="noreferrer">Flight data provided by adsb.fi</a>
   </footer>
+
+  {#if selectedAircraft}
+    <div class="sheet-layer" role="presentation">
+      <button class="sheet-backdrop" type="button" aria-label="Dismiss aircraft details" onclick={closePanels}></button>
+      <div class:compact-sheet={!selectedPosition?.inFov} class="detail-sheet" role="dialog" aria-modal="true" aria-labelledby="aircraft-title">
+        <div class="sheet-handle" aria-hidden="true"></div>
+        <div class="sheet-heading">
+          <div>
+            <span class="sheet-kicker">{selectedPosition?.inFov ? 'Aircraft in view' : 'Aircraft direction'}</span>
+            <h2 id="aircraft-title">{selectedAircraft.callsign}</h2>
+          </div>
+          <button class="close-button" type="button" aria-label="Close aircraft details" onclick={closePanels}>×</button>
+        </div>
+        {#if selectedPosition?.inFov}
+          <div class="aircraft-facts">
+            <div><span>Type</span><strong>{selectedAircraft.type ?? 'Unknown'}</strong></div>
+            <div><span>Registration</span><strong>{selectedAircraft.registration ?? 'Unavailable'}</strong></div>
+            <div><span>Altitude</span><strong>{formatAltitude(selectedAircraft.altBaro ?? selectedAircraft.altGeom)}</strong></div>
+            <div><span>Speed</span><strong>{formatSpeed(selectedAircraft.groundSpeed)}</strong></div>
+            <div><span>Heading</span><strong>{selectedAircraft.track === null ? 'Unavailable' : `${Math.round(selectedAircraft.track)}°`}</strong></div>
+            <div><span>Last update</span><strong>{adsbAgeSeconds === null ? 'Unknown' : `${adsbAgeSeconds}s ago`}</strong></div>
+          </div>
+          <div class="route-line">
+            <span>{selectedAircraft.origin ?? 'Unknown origin'}</span>
+            <b>→</b>
+            <span>{selectedAircraft.destination ?? 'Unknown destination'}</span>
+          </div>
+          <a class="tracker-link" href={`https://adsb.fi/aircraft/${selectedAircraft.icao24}`} target="_blank" rel="noreferrer">Open on adsb.fi <span aria-hidden="true">↗</span></a>
+        {:else}
+          <div class="direction-facts">
+            <div><span>Bearing</span><strong>{selectedPosition ? `${Math.round(selectedPosition.bearing)}°` : 'Unknown'}</strong></div>
+            <div><span>Elevation</span><strong>{selectedPosition ? `${Math.round(selectedPosition.elevation)}°` : 'Unknown'}</strong></div>
+            <div><span>Distance</span><strong>{selectedPosition ? `${selectedPosition.distance.toFixed(1)} nm` : 'Unknown'}</strong></div>
+          </div>
+        {/if}
+      </div>
+    </div>
+  {/if}
+
+  {#if settingsOpen}
+    <div class="settings-layer" role="presentation">
+      <button class="sheet-backdrop" type="button" aria-label="Close settings" onclick={closePanels}></button>
+      <div class="settings-sheet" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+        <div class="sheet-heading">
+          <div>
+            <span class="sheet-kicker">Configuration</span>
+            <h2 id="settings-title">Settings</h2>
+          </div>
+          <button class="close-button" type="button" aria-label="Close settings" onclick={closePanels}>×</button>
+        </div>
+        <label class="setting-row">
+          <span>Search radius</span>
+          <select bind:value={settings.radiusNm} onchange={saveSettings}>
+            <option value={10}>10 nm</option>
+            <option value={25}>25 nm</option>
+            <option value={50}>50 nm</option>
+            <option value={100}>100 nm</option>
+          </select>
+        </label>
+        <label class="setting-row">
+          <span>Distance units</span>
+          <select bind:value={settings.distanceUnit} onchange={saveSettings}>
+            <option value="nm">Nautical miles</option>
+            <option value="km">Kilometers</option>
+            <option value="mi">Statute miles</option>
+          </select>
+        </label>
+        <label class="setting-row">
+          <span>Altitude units</span>
+          <select bind:value={settings.altitudeUnit} onchange={saveSettings}>
+            <option value="ft">Feet</option>
+            <option value="m">Meters</option>
+          </select>
+        </label>
+        <div class="fov-setting">
+          <div class="setting-label"><span>Horizontal FOV</span><strong>{settings.horizontalFov}°</strong></div>
+          <input type="range" min="45" max="80" step="1" bind:value={settings.horizontalFov} oninput={saveSettings} />
+          <div class="setting-label"><span>Vertical FOV</span><strong>{settings.verticalFov}°</strong></div>
+          <input type="range" min="30" max="60" step="1" bind:value={settings.verticalFov} oninput={saveSettings} />
+        </div>
+        <p class="settings-note">Adjust FOV until a known landmark lines up with the camera view.</p>
+      </div>
+    </div>
+  {/if}
 </main>
