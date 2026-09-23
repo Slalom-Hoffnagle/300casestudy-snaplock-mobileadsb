@@ -107,6 +107,8 @@
       if (!navigator.mediaDevices?.getUserMedia) {
         throw new Error('Camera access is unavailable. Open SnapLock over HTTPS in a supported mobile browser.')
       }
+      // iOS requires requestPermission() to run synchronously from the button tap.
+      const motionPermission = requestMotionPermission()
       cameraStream = await navigator.mediaDevices.getUserMedia({
         audio: false,
         video: { facingMode: { ideal: 'environment' } },
@@ -114,7 +116,7 @@
       appPhase = 'location'
       await startLocationWatch()
       appPhase = 'motion'
-      await requestMotionPermission()
+      await motionPermission
       appPhase = 'ready'
       await tick()
       if (videoElement && cameraStream) videoElement.srcObject = cameraStream
