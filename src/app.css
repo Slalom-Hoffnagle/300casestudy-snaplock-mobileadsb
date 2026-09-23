@@ -279,6 +279,45 @@ a {
   text-shadow: 0 2px 12px rgba(0, 0, 0, 0.8);
 }
 
+.guide-dismiss,
+.guide-restore {
+  border: 0;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.72);
+  cursor: pointer;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.guide-dismiss {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 32px;
+  height: 32px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 50%;
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
+.guide-restore {
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.42);
+  font-size: 0.62rem;
+}
+
+.guide-dismiss:hover,
+.guide-restore:hover {
+  color: var(--signal);
+}
+
+.guide-dismiss:focus-visible,
+.guide-restore:focus-visible {
+  outline: 2px solid var(--signal);
+  outline-offset: 4px;
+}
+
 .sensor-readout {
   display: inline-flex;
   gap: 14px;
