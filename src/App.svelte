@@ -8,6 +8,7 @@
     type SensorReading,
   } from './lib/sensors'
   import { AdsbError, fetchNearbyAircraft, type Aircraft } from './lib/adsb'
+  import type { AircraftPosition, PositioningInput } from './lib/positioning'
 
   type AppPhase = 'welcome' | 'camera' | 'location' | 'motion' | 'ready' | 'denied'
 
@@ -38,12 +39,18 @@
   let adsbClock: number | null = null
   let adsbAbortController: AbortController | null = null
   let adsbRequestInFlight = false
+  let positioningWorker: Worker | null = null
+  let positioningFrame: number | null = null
+  let positioningRequestInFlight = false
+  let aircraftPositions: AircraftPosition[] = []
+  let positioningComputedAt: number | null = null
   let adsbRetryDelay = 3000
   const adsbRadiusNm = 50
   const isDev = import.meta.env.DEV
 
   $: adsbIsStale = lastAdsbUpdate !== null && currentTime - lastAdsbUpdate > 15000
   $: adsbAgeSeconds = lastAdsbUpdate === null ? null : Math.max(0, Math.floor((currentTime - lastAdsbUpdate) / 1000))
+  $: inFovCount = aircraftPositions.filter((position) => position.inFov).length
 
   const phaseCopy: Record<Exclude<AppPhase, 'welcome' | 'ready' | 'denied'>, string> = {
     camera: 'Camera access lets SnapLock see the sky through your phone.',
@@ -137,6 +144,7 @@
       if (videoElement && cameraStream) videoElement.srcObject = cameraStream
       await videoElement?.play()
       startAdsbPolling()
+      startPositioning()
     } catch (error) {
       cameraStream?.getTracks().forEach((track) => track.stop())
       cameraStream = null
@@ -209,6 +217,77 @@
     adsbAbortController = null
   }
 
+  function getPositioningInput(): PositioningInput | null {
+    if (latitude === null || longitude === null) return null
+    return {
+      aircraft: aircraft.map(({ icao24, callsign, latitude: aircraftLatitude, longitude: aircraftLongitude, altBaro, altGeom, groundSpeed, track, lastSeen }) => ({
+        icao24,
+        callsign,
+        latitude: aircraftLatitude,
+        longitude: aircraftLongitude,
+        altBaro,
+        altGeom,
+        groundSpeed,
+        track,
+        lastSeen,
+      })),
+      user: {
+        latitude,
+        longitude,
+        heading: sensorReading.heading,
+        pitch: sensorReading.pitch,
+      },
+      viewport: {
+        width: window.innerWidth,
+        height: window.innerHeight,
+        horizontalFov: 60,
+        verticalFov: 45,
+      },
+      now: Date.now(),
+    }
+  }
+
+  function schedulePositioningFrame() {
+    if (positioningFrame === null) positioningFrame = window.requestAnimationFrame(runPositioningFrame)
+  }
+
+  function runPositioningFrame() {
+    positioningFrame = null
+    if (!positioningWorker || document.hidden) return
+    if (!positioningRequestInFlight) {
+      const input = getPositioningInput()
+      if (input) {
+        positioningRequestInFlight = true
+        positioningWorker.postMessage(input)
+      }
+    }
+    schedulePositioningFrame()
+  }
+
+  function startPositioning() {
+    if (positioningWorker) return
+    positioningWorker = new Worker(new URL('./lib/positioning.worker.ts', import.meta.url), { type: 'module' })
+    positioningWorker.onmessage = (event: MessageEvent<{ positions: AircraftPosition[]; computedAt: number }>) => {
+      aircraftPositions = event.data.positions
+      positioningComputedAt = event.data.computedAt
+      positioningRequestInFlight = false
+    }
+    positioningWorker.onerror = () => {
+      positioningRequestInFlight = false
+      positioningWorker?.terminate()
+      positioningWorker = null
+    }
+    schedulePositioningFrame()
+  }
+
+  function stopPositioning() {
+    if (positioningFrame !== null) window.cancelAnimationFrame(positioningFrame)
+    positioningWorker?.terminate()
+    positioningFrame = null
+    positioningWorker = null
+    positioningRequestInFlight = false
+  }
+
   function handleVisibilityChange() {
     if (document.hidden) {
       if (adsbTimer !== null) window.clearTimeout(adsbTimer)
@@ -216,6 +295,8 @@
       adsbTimer = null
       adsbClock = null
       adsbAbortController?.abort()
+      if (positioningFrame !== null) window.cancelAnimationFrame(positioningFrame)
+      positioningFrame = null
       return
     }
 
@@ -224,6 +305,7 @@
         currentTime = Date.now()
       }, 1000)
       scheduleAdsbPoll()
+      schedulePositioningFrame()
     }
   }
 
@@ -233,6 +315,7 @@
     window.removeEventListener('deviceorientation', handleOrientation)
     document.removeEventListener('visibilitychange', handleVisibilityChange)
     stopAdsbPolling()
+    stopPositioning()
   })
 
   document.addEventListener('visibilitychange', handleVisibilityChange)
@@ -290,6 +373,7 @@
         <span><i class:active={orientationAvailable}></i> Motion {orientationAvailable ? 'ready' : 'unavailable'}</span>
         <span><i class:active={locationAccuracy !== null}></i> GPS {locationAccuracy ? `${Math.round(locationAccuracy)}m` : 'locating'}</span>
         <span><i class:active={adsbState === 'fresh' && !adsbIsStale}></i> ADS-B {adsbState === 'loading' ? 'loading' : `${aircraft.length} nearby`}</span>
+        <span><i class:active={positioningComputedAt !== null}></i> View {inFovCount} in frame</span>
       </div>
       {#if adsbIsStale}
         <p class="data-warning">ADS-B data is {adsbAgeSeconds}s old. Showing the last successful result.</p>
@@ -309,6 +393,7 @@
             <div><dt>Pitch</dt><dd>{sensorReading.pitch.toFixed(1)}°</dd></div>
             <div><dt>Roll</dt><dd>{sensorReading.roll.toFixed(1)}°</dd></div>
             <div><dt>Declination</dt><dd>{sensorReading.declination.toFixed(1)}°</dd></div>
+            <div><dt>Worker</dt><dd>{positioningComputedAt ? 'active' : 'waiting'}</dd></div>
           </dl>
         {/if}
       {/if}

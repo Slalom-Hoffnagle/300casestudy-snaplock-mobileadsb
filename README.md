@@ -18,6 +18,10 @@ The live view polls the same-origin `/api/adsb` endpoint every three seconds usi
 
 Polling is single-flight: a new request cannot overlap an active request. It pauses when the tab is hidden, aborts the active request, and resumes when the app becomes visible. Failed requests use exponential backoff, including longer retry delays for HTTP 429 responses. Results older than 15 seconds remain visible with a staleness warning.
 
+## M5 Positioning Engine
+
+`src/lib/positioning.worker.ts` keeps screen-space math off the main thread. Each frame it dead-reckons aircraft forward from speed and track, computes haversine distance and bearing, derives elevation from reported altitude, maps offsets through the default 60° by 45° FOV, and returns clamped edge coordinates for aircraft outside the frame. Worker requests are single-flight and pause when the page is hidden; M6 consumes the returned positions for rendering.
+
 ## Development
 
 Requires Node.js 20.19+ or 22.12+.
