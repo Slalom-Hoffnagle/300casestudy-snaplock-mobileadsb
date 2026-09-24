@@ -764,15 +764,18 @@
       <img src="/snaplock-mark.svg" width="36" height="36" alt="" />
       <span>SnapLock</span>
     </a>
-    <button class="settings-button" type="button" aria-label="Open settings" onclick={() => (settingsOpen = true)}>⚙</button>
-    <span class="status"><i></i> {appPhase === 'ready' ? 'Sensors online' : 'Ready when you are'}</span>
+    <button class="settings-button" type="button" aria-label="Open settings" onclick={() => (settingsOpen = true)}>
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M6 14v6" />
+      </svg>
+    </button>
   </header>
 
   {#if appPhase === 'welcome' || appPhase === 'denied'}
     <section class="permission-panel" aria-labelledby="welcome-title">
       <div class="permission-mark" aria-hidden="true">✦</div>
       <p class="eyebrow">Visual aircraft identification</p>
-      <h1 id="welcome-title">Look up.<br />Lock on.</h1>
+      <h1 id="welcome-title"><span>Look up.</span><span>Lock on.</span></h1>
       {#if appPhase === 'denied'}
         <div class="permission-error" role="alert">{errorMessage}</div>
         <button class="primary-action" type="button" onclick={retryPermissions}>Try permissions again</button>
@@ -853,14 +856,6 @@
       <p class="lede">{phaseCopy[appPhase]}</p>
     </section>
   {/if}
-
-  <footer class:live-footer={appPhase === 'ready'} class="app-footer">
-    <div class="milestone">
-      <span class="milestone-label">Build status</span>
-      <strong>{appPhase === 'ready' ? 'Sensors calibrated' : 'M3 sensor stack'}</strong>
-    </div>
-    <div class="data-attribution"><a href="https://adsb.fi" target="_blank" rel="noreferrer">Flight data by adsb.fi</a><a href="https://open-meteo.com/" target="_blank" rel="noreferrer">Terrain by Open-Meteo / Copernicus</a></div>
-  </footer>
 
   {#if selectedAircraft}
     <div class="sheet-layer" role="presentation">
@@ -964,6 +959,10 @@
           {#if appPhase !== 'ready'}<small>Enable sensors before calibration.</small>{/if}
         </div>
         <p class="settings-note">Adjust FOV until a known landmark lines up with the camera view.</p>
+        <div class="settings-attribution">
+          <a href="https://adsb.fi" target="_blank" rel="noreferrer">Flight data by adsb.fi</a>
+          <a href="https://open-meteo.com/" target="_blank" rel="noreferrer">Terrain by Open-Meteo / Copernicus</a>
+        </div>
       </div>
     </div>
   {/if}

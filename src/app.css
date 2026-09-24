@@ -137,6 +137,10 @@ a {
   gap: 20px;
 }
 
+.app-header {
+  justify-content: flex-start;
+}
+
 .brand {
   display: inline-flex;
   align-items: center;
@@ -168,7 +172,23 @@ a {
 }
 
 .settings-button {
-  margin-left: auto;
+  position: fixed;
+  top: max(18px, env(safe-area-inset-top));
+  right: max(18px, env(safe-area-inset-right));
+  z-index: 4;
+  width: 44px;
+  height: 44px;
+  margin: 0;
+}
+
+.settings-button svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .settings-button:hover,
@@ -181,24 +201,6 @@ a {
 .close-button:focus-visible {
   outline: 2px solid var(--signal);
   outline-offset: 3px;
-}
-
-.status {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 0.68rem;
-  font-weight: 700;
-  letter-spacing: 0;
-  text-transform: uppercase;
-}
-
-.status i {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--signal);
-  box-shadow: 0 0 12px var(--signal);
 }
 
 .viewfinder {
@@ -543,6 +545,12 @@ h1 {
   text-transform: uppercase;
 }
 
+#welcome-title {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
 .lede {
   margin-top: 24px;
   color: rgba(255, 255, 255, 0.8);
@@ -551,6 +559,7 @@ h1 {
 
 .app-footer {
   align-items: flex-end;
+  justify-content: flex-end;
   border-top: 1px solid var(--line);
   padding-top: 18px;
 }
@@ -582,6 +591,20 @@ h1 {
   display: grid;
   gap: 4px;
   text-align: right;
+}
+
+.settings-attribution {
+  display: grid;
+  gap: 6px;
+  margin-top: 30px;
+  padding-top: 18px;
+  border-top: 1px solid rgba(255, 255, 255, 0.18);
+}
+
+.settings-attribution a {
+  color: rgba(255, 255, 255, 0.58);
+  font-size: 0.68rem;
+  text-underline-offset: 3px;
 }
 
 .detail-warning {
@@ -1203,10 +1226,6 @@ h1 {
 
   .brand span {
     font-size: 1rem;
-  }
-
-  .status {
-    font-size: 0.58rem;
   }
 
   .viewfinder {
