@@ -1,65 +1,147 @@
 # SnapLock
 
-Mobile-first aircraft identification using camera direction, device sensors, and live ADS-B data.
+SnapLock is a mobile-first aircraft spotting app that overlays live ADS-B traffic on the camera view so you can identify nearby aircraft in real time. It combines device motion, GPS, observer elevation, and live flight data to place aircraft markers in the correct direction and elevation relative to your view.
 
-## M2 Camera & Permissions
+## Features
 
-The app presents a three-step onboarding flow for camera, location, and motion access. Once granted, it opens the rear-facing camera full-screen, starts a high-accuracy location watch, and enables device orientation readings. Denied permissions return to a recoverable browser-settings message.
+- Live aircraft overlays in the camera view with reticles and directional edge indicators
+- ADS-B aircraft tracking with filter radius, distance, bearing, and vertical placement
+- Sensor-aware alignment using phone motion, orientation, GPS, and calibration offsets
+- Observer elevation handling with GPS fallback and optional manual override
+- Calibration flow for heading and horizon alignment using aircraft, Moon, landmarks, or known bearings
+- Settings panel for FOV, distance units, altitude units, and search radius
+- Status panel summarizing motion, heading, GPS, ADS-B, view, calibration, and elevation state
 
-Camera, location, and motion APIs require HTTPS in production. Local development works on `localhost` and `127.0.0.1`.
+## Quick start
 
-## M3 Sensor Stack
+### Requirements
 
-The ready view treats alpha, beta, and gamma as a coupled 3D rotation. On iOS/WebKit it prefers `webkitCompassHeading`; elsewhere it prefers absolute alpha and falls back to relative heading with a warning. Heading datum is tracked so magnetic declination is applied exactly once. Upright portrait is required.
+- Node.js 20.19+ or 22.12+
+- Modern mobile browser with camera, motion, and location permissions
+- HTTPS in production; localhost works during development
 
-Aircraft direction vectors are projected directly through the camera's orthonormal right/up/forward basis. This avoids the former post-projection roll rotation, where small pitch changes could create large horizontal marker movement.
-
-## M4 ADS-B Data
-
-The live view polls the same-origin `/api/adsb` endpoint every three seconds using a default 10 nautical mile radius, configurable in Settings, normalizes aircraft records, and logs the parsed count in development builds. The endpoint proxies adsb.fi server-side because the upstream API does not allow direct browser CORS requests. It validates coordinates, caps the radius at 250 nautical miles, times out upstream requests after eight seconds, and caches identical results for 2.5 seconds.
-
-Polling is single-flight: a new request cannot overlap an active request. It pauses when the tab is hidden, aborts the active request, and resumes when the app becomes visible. Failed requests use exponential backoff, including longer retry delays for HTTP 429 responses. Results older than 15 seconds remain visible with a staleness warning.
-
-## M5 Positioning Engine
-
-`src/lib/positioning.worker.ts` keeps screen-space math off the main thread. Each frame it dead-reckons aircraft forward from speed and track, computes haversine distance and bearing, derives curvature/refraction-aware apparent elevation, maps offsets through the default 60° by 45° FOV, and returns clamped edge coordinates for aircraft outside the frame. Worker requests are single-flight and pause when the page is hidden; M6 consumes the returned positions for rendering.
-
-The camera stream's intrinsic dimensions are used to compensate FOV for portrait `object-fit: cover` cropping. Browser APIs do not expose reliable hardware focal length/FOV, so the configured FOV remains manually adjustable in Settings.
-
-## Observer Elevation
-
-Vertical placement resolves observer elevation in this order: manual MSL override, reliable fresh GPS WGS84 altitude, cached Copernicus GLO-90 terrain elevation, then unavailable. Matching ADS-B geometric or barometric altitude is selected by datum. SnapLock never silently assumes sea level.
-
-Terrain fallback uses the same-origin `/api/elevation` function, runs only when GPS altitude is unsuitable, and caches a rounded terrain cell for 24 hours. It is not tied to the three-second ADS-B poll. Open **Settings → Observer elevation** to inspect the source, enter a manual elevation, or restore automatic mode.
-
-The overlay uses spherical-Earth line of sight and standard terrestrial refraction (`k = 0.13`). Near-horizon targets are marked as uncertain rather than moved above the horizon. Ridges, buildings, and terrain between the observer and aircraft are not yet modeled.
-
-Terrain data: [Open-Meteo](https://open-meteo.com/) / Copernicus GLO-90. The public endpoint is limited to non-commercial use under 10,000 calls per day unless commercial access is arranged.
-
-## M6 Overlay Rendering
-
-The ready state adds a device-pixel-ratio-aware canvas above the camera. In-frame aircraft render as animated targeting reticles with callsign/elevation labels; the six nearest off-screen aircraft render as directional edge arrows. The canvas uses `requestAnimationFrame`, clears on every frame, and pauses when the page is hidden.
-
-## Sensor Calibration
-
-Open **Settings → Calibrate sensors** after enabling camera, location, and motion. Horizon alignment is optional. Heading can use the automatic corrected compass or be refined against a visible tracked aircraft, the Moon, a map-selected landmark, or a known true bearing. Calibration offsets and quality are stored locally and can be reset independently from display settings.
-
-One-reference heading calibration is marked unverified. Use **Verify heading direction** with two visible true bearings separated by 60–120° to detect normal versus reversed heading conventions. Opposite 180° references are intentionally rejected.
-
-Landmark calibration loads Leaflet only when opened and displays OpenStreetMap attribution on the map. Moon calibration uses SunCalc locally; no location or calibration data is sent to either library.
-
-## Development
-
-Requires Node.js 20.19+ or 22.12+.
+### Install and run
 
 ```sh
 npm install
 npm run dev
 ```
 
-Vite prints the local URL and reloads the app when source files change.
+Then open the local Vite URL shown in the terminal.
+
+## Setup and permissions
+
+1. Open the app in a supported browser on a phone or mobile emulation environment.
+2. Allow camera access so the live view can open.
+3. Allow location access so SnapLock can estimate your position and altitude.
+4. Allow motion/orientation access so headings, pitch, and roll can be aligned to the camera.
+5. If permission is denied, use the app prompt to retry after enabling it in device settings.
+
+The app expects a portrait orientation and requires the device to be held upright for accurate projection.
+
+## Calibrating the app
+
+Open the Settings panel and choose Calibrate sensors.
+
+### Calibration methods
+
+- Automatic corrected compass heading
+- Visible aircraft reference
+- Moon alignment
+- Landmark selection on a map
+- Known true bearing entry
+
+### Recommended calibration workflow
+
+1. Enable camera, location, and motion permissions.
+2. Wait for a stable GPS fix and valid motion readings.
+3. Go to Settings > Calibrate sensors.
+4. Choose a method suitable to your environment.
+5. Keep the target centered while the app gathers readings.
+6. Verify the heading direction if you are calibrating with two references.
+7. Save the calibration when the quality is acceptable.
+
+Calibration values are stored locally in the browser so the app can restore them on future visits.
+
+## Using the app
+
+1. Point the phone at the sky while holding it upright.
+2. Watch for nearby aircraft markers appearing in the view.
+3. Use the reticles and edge indicators to identify the aircraft direction and location.
+4. Tap an aircraft in the live view for the details sheet.
+5. Review distance, altitude, speed, heading, apparent elevation, and confidence in the aircraft detail panel.
+6. Use Settings to adjust search radius, FOV, units, and elevation behavior.
+
+### Status panel
+
+The Status control in the top-left header shows a live summary of the app state. It toggles open and closed on tap and closes when you tap outside the panel.
+
+### Observer elevation
+
+SnapLock resolves observer elevation in this order:
+
+- manual MSL override
+- fresh GPS altitude
+- cached terrain elevation
+- unavailable
+
+Use Settings > Observer elevation to inspect the source or restore automatic behavior.
+
+## Architecture
+
+The application is organized as a Vite Svelte app with a thin server-side API layer for ADS-B and terrain elevation proxies.
+
+```mermaid
+flowchart LR
+    A[Browser / Mobile App] --> B[Svelte UI]
+    B --> C[Device Sensors]
+    B --> D[Positioning Engine]
+    B --> E[Calibration Flow]
+    B --> F[Settings + State]
+
+    D --> G[Aircraft Projection / Reticle Rendering]
+    F --> H[Local Storage]
+
+    B --> I[api/adsb.ts]
+    B --> J[api/elevation.ts]
+    I --> K[adsb.fi API]
+    J --> L[Open-Meteo / Copernicus Terrain]
+
+    C --> M[GPS + Orientation + Camera]
+    D --> N[Canvas Overlay]
+```
+
+### Frontend
+
+The main app is rendered in [src/App.svelte](src/App.svelte). It owns the live camera, overlays, settings panel, calibration flow, and aircraft selection sheet.
+
+### Core libraries
+
+- [src/lib/positioning.ts](src/lib/positioning.ts): geodesic math, line-of-sight placement, bearing, and dead-reckoning
+- [src/lib/elevation.ts](src/lib/elevation.ts): observer elevation resolution and confidence logic
+- [src/lib/sensors.ts](src/lib/sensors.ts): smoothing and sensor normalization
+- [src/lib/orientation.ts](src/lib/orientation.ts): camera frame and orientation math
+- [src/lib/calibration](src/lib/calibration): heading and landmark calibration flows
+
+### API layer
+
+The app includes same-origin server endpoints in [api](api):
+
+- [api/adsb.ts](api/adsb.ts): proxies nearby aircraft data from adsb.fi to the browser without direct CORS access
+- [api/elevation.ts](api/elevation.ts): resolves terrain elevation from a cached remote terrain provider
+
+These APIs are required in production because browsers block direct access to the upstream data sources.
+
+### Runtime behavior
+
+- The live view refreshes aircraft data on a poll cadence and keeps a stale-data warning if the feed ages out.
+- The positioning worker handles frame-by-frame aircraft projection off the main UI thread.
+- Canvas overlays render reticles and edge arrows over the camera feed using device-pixel-ratio-aware sizing.
+- Settings and calibration state are persisted in browser local storage.
 
 ## Validation
+
+Run the following checks before release:
 
 ```sh
 npm run check
@@ -68,13 +150,27 @@ npm run build
 npm run preview
 ```
 
-The static production output is written to `dist/`. The `api/adsb.ts` and `api/elevation.ts` functions must be deployed with the app; Vercel detects them automatically when the repository is imported.
+The production build output is written to the `dist/` folder.
 
-## Deploy to Vercel
+## Deployment
+
+This app is designed to be deployed on Vercel or any platform that supports both the front-end build and the serverless API functions.
+
+### Vercel setup
 
 1. Push this repository to GitHub.
-2. Import the repository in Vercel.
-3. Keep the detected framework preset as **Vite**.
-4. Deploy with build command `npm run build` and output directory `dist`.
+2. Import it into Vercel.
+3. Keep the framework preset as Vite.
+4. Use `npm run build` for the build command.
+5. Set the output directory to `dist`.
 
-Vercel provides HTTPS automatically, which is required for camera, location, and orientation APIs. Both data proxies are required in production; do not deploy only the `dist/` directory to a static host unless it supports equivalent server-side functions.
+For camera, location, and motion APIs to work correctly, the app must be served over HTTPS.
+
+## Data attributions
+
+- ADS-B aircraft data: adsb.fi
+- Terrain elevation: Open-Meteo / Copernicus GLO-90
+- Map tiles and landmark calibration map: OpenStreetMap contributors
+- Moon calculations: SunCalc
+
+All attribution and source information remains visible in-app where relevant.
