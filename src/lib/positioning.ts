@@ -1,3 +1,11 @@
+import {
+  selectAircraftAltitude,
+  solveElevation,
+  type AltitudeConfidence,
+  type ObserverElevation,
+  type ObserverElevationSource,
+} from './elevation'
+
 export type PositioningAircraft = {
   icao24: string
   callsign: string
@@ -5,6 +13,7 @@ export type PositioningAircraft = {
   longitude: number
   altBaro: number | null
   altGeom: number | null
+  onGround?: boolean
   groundSpeed: number | null
   track: number | null
   lastSeen: number
@@ -21,6 +30,11 @@ export type PositioningInput = {
     headingOffset?: number
     pitchOffset?: number
     rollOffset?: number
+    elevationMeters?: number | null
+    elevationSource?: ObserverElevationSource
+    elevationConfidence?: AltitudeConfidence
+    elevationAccuracyMeters?: number | null
+    elevationTimestamp?: number
   }
   viewport: {
     width: number
@@ -39,6 +53,11 @@ export type AircraftPosition = {
   inFov: boolean
   bearing: number
   elevation: number
+  geometricElevation: number | null
+  elevationUncertainty: number | null
+  verticalConfidence: AltitudeConfidence
+  nearHorizon: boolean
+  verticalAvailable: boolean
   distance: number
   horizontalOffset: number
   verticalOffset: number
@@ -54,7 +73,6 @@ export type PositioningOutput = {
 }
 
 const EARTH_RADIUS_NM = 3440.065
-const FEET_PER_NM = 6076.12
 const KNOTS_TO_NM_PER_MS = 1 / 3600
 
 function toRadians(value: number) {
@@ -129,11 +147,6 @@ function deadReckon(aircraft: PositioningAircraft, now: number) {
   }
 }
 
-function elevationAngle(distanceNm: number, altitudeFeet: number) {
-  const altitudeNm = Math.max(0, altitudeFeet) / FEET_PER_NM
-  return toDegrees(Math.atan2(altitudeNm, Math.max(distanceNm, 0.001)))
-}
-
 function clampToEdge(x: number, y: number, width: number, height: number) {
   const centerX = width / 2
   const centerY = height / 2
@@ -151,21 +164,31 @@ export function calculatePositions(input: PositioningInput): PositioningOutput {
   const calibratedHeading = normalizeAngle(user.heading + (user.headingOffset ?? 0))
   const cameraElevation = 90 - user.pitch + (user.pitchOffset ?? 0)
   const rollRadians = -((user.roll ?? 0) + (user.rollOffset ?? 0)) * Math.PI / 180
+  const observerElevation: ObserverElevation = {
+    meters: user.elevationMeters ?? null,
+    datum: user.elevationSource === 'gps' ? 'wgs84-ellipsoid' : !user.elevationSource || user.elevationSource === 'unavailable' ? 'unknown' : 'msl',
+    source: user.elevationSource ?? 'unavailable',
+    confidence: user.elevationConfidence ?? 'unavailable',
+    accuracyMeters: user.elevationAccuracyMeters ?? null,
+    timestamp: user.elevationTimestamp ?? 0,
+  }
   const positions = input.aircraft
-    .filter((aircraft) => (aircraft.altBaro ?? aircraft.altGeom ?? 0) > 0)
+    .filter((aircraft) => !aircraft.onGround)
     .map((aircraft) => {
       const current = deadReckon(aircraft, now)
       const distance = haversineDistance(user.latitude, user.longitude, current.latitude, current.longitude)
       const bearing = bearingBetween(user.latitude, user.longitude, current.latitude, current.longitude)
-      const altitude = aircraft.altBaro ?? aircraft.altGeom ?? 0
-      const elevation = elevationAngle(distance, altitude)
+      const selectedAltitude = selectAircraftAltitude({ altGeomFeet: aircraft.altGeom, altBaroFeet: aircraft.altBaro }, observerElevation)
+      const elevationSolution = solveElevation(distance * 1852, observerElevation, selectedAltitude)
+      const verticalAvailable = elevationSolution.apparentDegrees !== null
+      const elevation = elevationSolution.apparentDegrees ?? 0
       const horizontalOffset = signedAngleDifference(bearing, calibratedHeading)
       const verticalOffset = elevation - cameraElevation
       const projectedX = horizontalOffset / viewport.horizontalFov * viewport.width
       const projectedY = -verticalOffset / viewport.verticalFov * viewport.height
       const x = viewport.width / 2 + projectedX * Math.cos(rollRadians) - projectedY * Math.sin(rollRadians)
       const y = viewport.height / 2 + projectedX * Math.sin(rollRadians) + projectedY * Math.cos(rollRadians)
-      const inFov = x >= 0 && x <= viewport.width && y >= 0 && y <= viewport.height
+      const inFov = verticalAvailable && x >= 0 && x <= viewport.width && y >= 0 && y <= viewport.height
       const edge = clampToEdge(x, y, viewport.width, viewport.height)
       const distanceScale = Math.max(0.55, Math.min(1, 1 - distance / 100))
 
@@ -177,12 +200,17 @@ export function calculatePositions(input: PositioningInput): PositioningOutput {
         inFov,
         bearing,
         elevation,
+        geometricElevation: elevationSolution.geometricDegrees,
+        elevationUncertainty: elevationSolution.uncertaintyDegrees,
+        verticalConfidence: elevationSolution.confidence,
+        nearHorizon: elevationSolution.nearHorizon,
+        verticalAvailable,
         distance,
         horizontalOffset,
         verticalOffset,
         edgeX: edge.x,
         edgeY: edge.y,
-        opacity: distanceScale,
+        opacity: distanceScale * (elevationSolution.nearHorizon ? 0.72 : 1),
         size: 24 + 20 * distanceScale,
       }
     })

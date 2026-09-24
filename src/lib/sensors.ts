@@ -5,6 +5,9 @@ export type SensorReading = {
   declination: number
   latitude: number | null
   longitude: number | null
+  altitude: number | null
+  altitudeAccuracy: number | null
+  altitudeTimestamp: number
 }
 
 type DeclinationPoint = {

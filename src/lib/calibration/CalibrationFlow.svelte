@@ -37,7 +37,7 @@
 
   $: moonTarget = latitude !== null && longitude !== null ? getMoonTarget(latitude, longitude) : null
   $: airborneTargets = aircraftPositions
-    .filter((position) => aircraft.some((item) => item.icao24 === position.icao24 && (item.altBaro ?? item.altGeom ?? 0) > 0))
+    .filter((position) => aircraft.some((item) => item.icao24 === position.icao24 && !item.onGround && (item.altBaro ?? item.altGeom ?? 0) > 0))
     .sort((left, right) => left.distance - right.distance)
     .slice(0, 12)
 

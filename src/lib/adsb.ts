@@ -5,6 +5,7 @@ export type Aircraft = {
   longitude: number
   altBaro: number | null
   altGeom: number | null
+  onGround: boolean
   groundSpeed: number | null
   track: number | null
   type: string | null
@@ -47,6 +48,7 @@ function parseAircraft(record: Record<string, unknown>, timestamp: number): Airc
 
   if (!icao24 || latitude === null || longitude === null) return null
 
+  const onGround = record.alt_baro === 'ground' || record.ground === true
   const altBaro = numberOrNull(record.alt_baro)
   return {
     icao24: icao24.toLowerCase(),
@@ -55,6 +57,7 @@ function parseAircraft(record: Record<string, unknown>, timestamp: number): Airc
     longitude,
     altBaro,
     altGeom: numberOrNull(record.alt_geom),
+    onGround,
     groundSpeed: numberOrNull(record.gs),
     track: numberOrNull(record.track),
     type: stringOrNull(record.t),

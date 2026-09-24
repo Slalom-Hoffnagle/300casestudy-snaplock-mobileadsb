@@ -17,6 +17,16 @@ export default defineConfig({
           return `/api/v3/lat/${lat}/lon/${lon}/dist/${dist}`
         },
       },
+      '/api/elevation': {
+        target: 'https://api.open-meteo.com',
+        changeOrigin: true,
+        rewrite: (path) => {
+          const query = new URL(path, 'http://localhost').searchParams
+          const latitude = query.get('lat') ?? ''
+          const longitude = query.get('lon') ?? ''
+          return `/v1/elevation?latitude=${encodeURIComponent(latitude)}&longitude=${encodeURIComponent(longitude)}`
+        },
+      },
     },
   },
 })

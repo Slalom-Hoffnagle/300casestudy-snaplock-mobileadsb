@@ -17,6 +17,11 @@
     parseCalibration,
     type SensorCalibration,
   } from './lib/calibration'
+  import {
+    gpsAltitudeConfidence,
+    resolveObserverElevation,
+  } from './lib/elevation'
+  import { fetchTerrainElevation, type TerrainElevationFix } from './lib/elevation-service'
 
   type AppPhase = 'welcome' | 'camera' | 'location' | 'motion' | 'ready' | 'denied'
 
@@ -30,6 +35,7 @@
   let latitude: number | null = null
   let longitude: number | null = null
   let debugEnabled = false
+  let showDevHorizon = false
   let sensorReading: SensorReading = {
     heading: 0,
     pitch: 0,
@@ -37,6 +43,9 @@
     declination: 0,
     latitude: null,
     longitude: null,
+    altitude: null,
+    altitudeAccuracy: null,
+    altitudeTimestamp: 0,
   }
   let aircraft: Aircraft[] = []
   let adsbState: 'idle' | 'loading' | 'fresh' | 'error' = 'idle'
@@ -61,12 +70,20 @@
   let settingsOpen = false
   let calibrationOpen = false
   let calibration: SensorCalibration = { ...DEFAULT_CALIBRATION }
+  let terrainElevation: TerrainElevationFix | null = null
+  let terrainElevationError = ''
+  let elevationAbortController: AbortController | null = null
+  let requestedTerrainCell = ''
+  let terrainRequestLatitude: number | null = null
+  let terrainRequestLongitude: number | null = null
+  let terrainRetryAfter = 0
   let settings = {
     radiusNm: 50,
     distanceUnit: 'nm',
     altitudeUnit: 'ft',
     horizontalFov: 60,
     verticalFov: 45,
+    manualElevationMeters: null as number | null,
   }
   let adsbRetryDelay = 3000
   let adsbRadiusNm = settings.radiusNm
@@ -79,6 +96,25 @@
     ? haversineDistance(calibration.latitude, calibration.longitude, latitude, longitude) > 50
     : false
   $: calibrationStale = calibrationIsStale(calibration, currentTime) || calibrationLocationStale
+  $: observerElevation = resolveObserverElevation({
+    manualMeters: settings.manualElevationMeters,
+    gpsMeters: sensorReading.altitude,
+    gpsAccuracyMeters: sensorReading.altitudeAccuracy,
+    gpsTimestamp: sensorReading.altitudeTimestamp,
+    terrainMeters: terrainElevation?.elevation ?? null,
+    terrainTimestamp: terrainElevation?.timestamp,
+    now: currentTime,
+  })
+  $: observerElevationText = observerElevation.meters === null
+    ? 'unavailable'
+    : `${observerElevation.source} ${settings.altitudeUnit === 'ft' ? `${Math.round(observerElevation.meters / 0.3048)} ft` : `${Math.round(observerElevation.meters)} m`}`
+  $: manualElevationDisplay = settings.manualElevationMeters === null
+    ? ''
+    : settings.altitudeUnit === 'ft'
+      ? String(Math.round(settings.manualElevationMeters / 0.3048))
+      : String(Math.round(settings.manualElevationMeters))
+  $: devHorizonTop = 50 + ((90 - sensorReading.pitch + calibration.pitchOffset) / settings.verticalFov) * 100
+  $: devHorizonRoll = -(sensorReading.roll + calibration.rollOffset)
 
   function loadSettings() {
     try {
@@ -117,6 +153,50 @@
     adsbRadiusNm = settings.radiusNm
     localStorage.setItem('snaplock-settings', JSON.stringify(settings))
     if (appPhase === 'ready') scheduleAdsbPoll()
+  }
+
+  function clearManualElevation() {
+    settings.manualElevationMeters = null
+    saveSettings()
+    if (latitude !== null && longitude !== null) void ensureTerrainElevation(latitude, longitude)
+  }
+
+  function setManualElevation(event: Event) {
+    const value = Number((event.currentTarget as HTMLInputElement).value)
+    if (!Number.isFinite(value)) return
+    settings.manualElevationMeters = settings.altitudeUnit === 'ft' ? value * 0.3048 : value
+    saveSettings()
+  }
+
+  async function ensureTerrainElevation(currentLatitude: number, currentLongitude: number) {
+    if (settings.manualElevationMeters !== null) return
+    const gpsConfidence = gpsAltitudeConfidence(sensorReading.altitude, sensorReading.altitudeAccuracy)
+    if (gpsConfidence === 'high' || gpsConfidence === 'medium') {
+      elevationAbortController?.abort()
+      elevationAbortController = null
+      return
+    }
+    const cell = `${currentLatitude.toFixed(3)}:${currentLongitude.toFixed(3)}`
+    const movedNm = terrainRequestLatitude === null || terrainRequestLongitude === null
+      ? Number.POSITIVE_INFINITY
+      : haversineDistance(terrainRequestLatitude, terrainRequestLongitude, currentLatitude, currentLongitude)
+    if (movedNm < 0.135 && Date.now() < terrainRetryAfter) return
+    if (cell === requestedTerrainCell && (terrainElevation || elevationAbortController)) return
+    requestedTerrainCell = cell
+    terrainRequestLatitude = currentLatitude
+    terrainRequestLongitude = currentLongitude
+    elevationAbortController?.abort()
+    elevationAbortController = new AbortController()
+    terrainElevationError = ''
+    try {
+      terrainElevation = await fetchTerrainElevation(currentLatitude, currentLongitude, elevationAbortController.signal)
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') return
+      terrainElevationError = error instanceof Error ? error.message : 'Terrain elevation is unavailable.'
+      terrainRetryAfter = Date.now() + 5 * 60 * 1000
+    } finally {
+      elevationAbortController = null
+    }
   }
 
   function closePanels() {
@@ -178,6 +258,7 @@
     const heading = applyDeclination(event.alpha, declination)
 
     sensorReading = {
+      ...sensorReading,
       heading: smoothAngle(sensorReading.heading, heading),
       pitch: smoothLinear(sensorReading.pitch, event.beta ?? sensorReading.pitch),
       roll: smoothLinear(sensorReading.roll, event.gamma ?? sensorReading.roll),
@@ -218,12 +299,18 @@
           locationAccuracy = position.coords.accuracy
           latitude = position.coords.latitude
           longitude = position.coords.longitude
+          const altitude = position.coords.altitude
+          const altitudeAccuracy = position.coords.altitudeAccuracy
           sensorReading = {
             ...sensorReading,
             declination: magneticDeclination(latitude, longitude),
             latitude,
             longitude,
+            altitude: altitude === null ? sensorReading.altitude : smoothLinear(sensorReading.altitude, altitude),
+            altitudeAccuracy,
+            altitudeTimestamp: altitude === null ? sensorReading.altitudeTimestamp : position.timestamp,
           }
+          void ensureTerrainElevation(latitude, longitude)
           resolve()
         },
         () => reject(new Error('Location permission was denied. Enable location access in your browser settings and try again.')),
@@ -333,13 +420,14 @@
   function getPositioningInput(): PositioningInput | null {
     if (latitude === null || longitude === null) return null
     return {
-      aircraft: aircraft.map(({ icao24, callsign, latitude: aircraftLatitude, longitude: aircraftLongitude, altBaro, altGeom, groundSpeed, track, lastSeen }) => ({
+      aircraft: aircraft.map(({ icao24, callsign, latitude: aircraftLatitude, longitude: aircraftLongitude, altBaro, altGeom, onGround, groundSpeed, track, lastSeen }) => ({
         icao24,
         callsign,
         latitude: aircraftLatitude,
         longitude: aircraftLongitude,
         altBaro,
         altGeom,
+        onGround,
         groundSpeed,
         track,
         lastSeen,
@@ -353,6 +441,11 @@
         headingOffset: calibration.headingOffset,
         pitchOffset: calibration.pitchOffset,
         rollOffset: calibration.rollOffset,
+        elevationMeters: observerElevation.meters,
+        elevationSource: observerElevation.source,
+        elevationConfidence: observerElevation.confidence,
+        elevationAccuracyMeters: observerElevation.accuracyMeters,
+        elevationTimestamp: observerElevation.timestamp,
       },
       viewport: {
         width: window.innerWidth,
@@ -516,6 +609,7 @@
       adsbTimer = null
       adsbClock = null
       adsbAbortController?.abort()
+      elevationAbortController?.abort()
       if (positioningFrame !== null) window.cancelAnimationFrame(positioningFrame)
       positioningFrame = null
       if (overlayFrame !== null) window.cancelAnimationFrame(overlayFrame)
@@ -530,6 +624,7 @@
       scheduleAdsbPoll()
       schedulePositioningFrame()
       startOverlay()
+      if (latitude !== null && longitude !== null) void ensureTerrainElevation(latitude, longitude)
     }
   }
 
@@ -539,6 +634,7 @@
     window.removeEventListener('deviceorientation', handleOrientation)
     document.removeEventListener('visibilitychange', handleVisibilityChange)
     stopAdsbPolling()
+    elevationAbortController?.abort()
     stopPositioning()
     stopOverlay()
   })
@@ -561,6 +657,9 @@
   {#if appPhase === 'ready' && cameraStream}
     <video class="camera-feed" bind:this={videoElement} autoplay muted playsinline></video>
     <canvas class="overlay-canvas" bind:this={overlayCanvas} onclick={handleOverlayClick} aria-label="Aircraft position overlay"></canvas>
+    {#if isDev && showDevHorizon}
+      <div class="dev-horizon" style={`top: ${devHorizonTop}%; transform: rotate(${devHorizonRoll}deg)`} aria-hidden="true"></div>
+    {/if}
   {/if}
   <div class="sky" aria-hidden="true"></div>
   <div class="scrim" aria-hidden="true"></div>
@@ -600,6 +699,7 @@
         <span><i class:active={adsbState === 'fresh' && !adsbIsStale}></i> ADS-B {adsbState === 'loading' ? 'loading' : `${aircraft.length} nearby`}</span>
         <span><i class:active={positioningComputedAt !== null}></i> View {inFovCount} in frame</span>
         <span><i class:active={calibration.quality !== 'uncalibrated' && !calibrationStale}></i> Calibration {calibrationStale ? 'stale' : calibration.quality}</span>
+        <span><i class:active={observerElevation.source !== 'unavailable'}></i> Elevation {observerElevation.source}</span>
       </div>
       {#if adsbIsStale}
         <p class="data-warning">ADS-B data is {adsbAgeSeconds}s old. Showing the last successful result.</p>
@@ -608,6 +708,11 @@
       {/if}
       {#if locationAccuracy !== null && locationAccuracy > 100}
         <p class="accuracy-warning">GPS accuracy is limited. Move outdoors for a better fix.</p>
+      {/if}
+      {#if observerElevation.source === 'unavailable'}
+        <p class="accuracy-warning">Vertical aircraft placement is limited until observer elevation is available.</p>
+      {:else if terrainElevationError}
+        <p class="accuracy-warning">{terrainElevationError}</p>
       {/if}
       {#if isDev}
         <button class="debug-toggle" type="button" onclick={() => (debugEnabled = !debugEnabled)}>
@@ -620,7 +725,11 @@
             <div><dt>Roll</dt><dd>{sensorReading.roll.toFixed(1)}°</dd></div>
             <div><dt>Declination</dt><dd>{sensorReading.declination.toFixed(1)}°</dd></div>
             <div><dt>Worker</dt><dd>{positioningComputedAt ? 'active' : 'waiting'}</dd></div>
+            <div><dt>Observer</dt><dd>{observerElevationText}</dd></div>
+            <div><dt>Elevation accuracy</dt><dd>{observerElevation.accuracyMeters === null ? 'unknown' : `±${Math.round(observerElevation.accuracyMeters)}m`}</dd></div>
+            {#if selectedPosition}<div><dt>Apparent target</dt><dd>{selectedPosition.elevation.toFixed(2)}°</dd></div>{/if}
           </dl>
+          <button class="debug-toggle" type="button" onclick={() => (showDevHorizon = !showDevHorizon)}>{showDevHorizon ? 'Hide calibrated horizon' : 'Show calibrated horizon'}</button>
         {/if}
       {/if}
     </section>
@@ -638,7 +747,7 @@
       <span class="milestone-label">Build status</span>
       <strong>{appPhase === 'ready' ? 'Sensors calibrated' : 'M3 sensor stack'}</strong>
     </div>
-    <a href="https://adsb.fi" target="_blank" rel="noreferrer">Flight data provided by adsb.fi</a>
+    <div class="data-attribution"><a href="https://adsb.fi" target="_blank" rel="noreferrer">Flight data by adsb.fi</a><a href="https://open-meteo.com/" target="_blank" rel="noreferrer">Terrain by Open-Meteo / Copernicus</a></div>
   </footer>
 
   {#if selectedAircraft}
@@ -661,6 +770,8 @@
             <div><span>Speed</span><strong>{formatSpeed(selectedAircraft.groundSpeed)}</strong></div>
             <div><span>Heading</span><strong>{selectedAircraft.track === null ? 'Unavailable' : `${Math.round(selectedAircraft.track)}°`}</strong></div>
             <div><span>Last update</span><strong>{adsbAgeSeconds === null ? 'Unknown' : `${adsbAgeSeconds}s ago`}</strong></div>
+            <div><span>Apparent elevation</span><strong>{selectedPosition ? `${selectedPosition.elevation.toFixed(1)}°` : 'Unavailable'}</strong></div>
+            <div><span>Vertical confidence</span><strong>{selectedPosition?.verticalConfidence ?? 'Unavailable'}</strong></div>
           </div>
           <div class="route-line">
             <span>{selectedAircraft.origin ?? 'Unknown origin'}</span>
@@ -668,10 +779,11 @@
             <span>{selectedAircraft.destination ?? 'Unknown destination'}</span>
           </div>
           <a class="tracker-link" href={`https://adsb.fi/aircraft/${selectedAircraft.icao24}`} target="_blank" rel="noreferrer">Open on adsb.fi <span aria-hidden="true">↗</span></a>
+          {#if selectedPosition?.nearHorizon}<p class="detail-warning">Near-horizon placement is uncertain due to altitude and atmospheric variation. Terrain occlusion is not modeled.</p>{/if}
         {:else}
           <div class="direction-facts">
             <div><span>Bearing</span><strong>{selectedPosition ? `${Math.round(selectedPosition.bearing)}°` : 'Unknown'}</strong></div>
-            <div><span>Elevation</span><strong>{selectedPosition ? `${Math.round(selectedPosition.elevation)}°` : 'Unknown'}</strong></div>
+            <div><span>Elevation</span><strong>{selectedPosition?.verticalAvailable ? `${selectedPosition.elevation.toFixed(1)}°` : 'Unavailable'}</strong></div>
             <div><span>Distance</span><strong>{selectedPosition ? `${selectedPosition.distance.toFixed(1)} nm` : 'Unknown'}</strong></div>
           </div>
         {/if}
@@ -719,6 +831,16 @@
           <input type="range" min="45" max="80" step="1" bind:value={settings.horizontalFov} oninput={saveSettings} />
           <div class="setting-label"><span>Vertical FOV</span><strong>{settings.verticalFov}°</strong></div>
           <input type="range" min="30" max="60" step="1" bind:value={settings.verticalFov} oninput={saveSettings} />
+        </div>
+        <div class="elevation-settings">
+          <div class="setting-label"><span>Observer elevation</span><strong>{observerElevationText}</strong></div>
+          <p>Automatic mode prefers accurate GPS altitude, then cached Copernicus terrain elevation.</p>
+          <label class="setting-row">
+            <span>Manual MSL elevation ({settings.altitudeUnit === 'ft' ? 'feet' : 'meters'})</span>
+            <input type="number" step="1" value={manualElevationDisplay} placeholder="Automatic" onchange={setManualElevation} />
+          </label>
+          {#if settings.manualElevationMeters !== null}<button class="reset-action" type="button" onclick={clearManualElevation}>Use automatic elevation</button>{/if}
+          {#if terrainElevationError}<small>{terrainElevationError}</small>{/if}
         </div>
         <div class="calibration-settings">
           <div class="setting-label"><span>Sensor calibration</span><strong>{calibrationStale ? 'Stale' : calibration.quality}</strong></div>

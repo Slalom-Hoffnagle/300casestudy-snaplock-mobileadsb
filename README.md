@@ -20,7 +20,17 @@ Polling is single-flight: a new request cannot overlap an active request. It pau
 
 ## M5 Positioning Engine
 
-`src/lib/positioning.worker.ts` keeps screen-space math off the main thread. Each frame it dead-reckons aircraft forward from speed and track, computes haversine distance and bearing, derives elevation from reported altitude, maps offsets through the default 60° by 45° FOV, and returns clamped edge coordinates for aircraft outside the frame. Worker requests are single-flight and pause when the page is hidden; M6 consumes the returned positions for rendering.
+`src/lib/positioning.worker.ts` keeps screen-space math off the main thread. Each frame it dead-reckons aircraft forward from speed and track, computes haversine distance and bearing, derives curvature/refraction-aware apparent elevation, maps offsets through the default 60° by 45° FOV, and returns clamped edge coordinates for aircraft outside the frame. Worker requests are single-flight and pause when the page is hidden; M6 consumes the returned positions for rendering.
+
+## Observer Elevation
+
+Vertical placement resolves observer elevation in this order: manual MSL override, reliable fresh GPS WGS84 altitude, cached Copernicus GLO-90 terrain elevation, then unavailable. Matching ADS-B geometric or barometric altitude is selected by datum. SnapLock never silently assumes sea level.
+
+Terrain fallback uses the same-origin `/api/elevation` function, runs only when GPS altitude is unsuitable, and caches a rounded terrain cell for 24 hours. It is not tied to the three-second ADS-B poll. Open **Settings → Observer elevation** to inspect the source, enter a manual elevation, or restore automatic mode.
+
+The overlay uses spherical-Earth line of sight and standard terrestrial refraction (`k = 0.13`). Near-horizon targets are marked as uncertain rather than moved above the horizon. Ridges, buildings, and terrain between the observer and aircraft are not yet modeled.
+
+Terrain data: [Open-Meteo](https://open-meteo.com/) / Copernicus GLO-90. The public endpoint is limited to non-commercial use under 10,000 calls per day unless commercial access is arranged.
 
 ## M6 Overlay Rendering
 
@@ -47,11 +57,12 @@ Vite prints the local URL and reloads the app when source files change.
 
 ```sh
 npm run check
+npm test
 npm run build
 npm run preview
 ```
 
-The static production output is written to `dist/`. The `api/adsb.ts` function must be deployed with the app; Vercel detects it automatically when the repository is imported.
+The static production output is written to `dist/`. The `api/adsb.ts` and `api/elevation.ts` functions must be deployed with the app; Vercel detects them automatically when the repository is imported.
 
 ## Deploy to Vercel
 
@@ -60,4 +71,4 @@ The static production output is written to `dist/`. The `api/adsb.ts` function m
 3. Keep the detected framework preset as **Vite**.
 4. Deploy with build command `npm run build` and output directory `dist`.
 
-Vercel provides HTTPS automatically, which is required for camera, location, and orientation APIs. The ADS-B proxy is also required in production; do not deploy only the `dist/` directory to a static host unless it supports an equivalent server-side function.
+Vercel provides HTTPS automatically, which is required for camera, location, and orientation APIs. Both data proxies are required in production; do not deploy only the `dist/` directory to a static host unless it supports equivalent server-side functions.

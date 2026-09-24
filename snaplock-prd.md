@@ -76,6 +76,9 @@ Aviation enthusiasts, curious onlookers, and professionals frequently spot aircr
 - Minimum acceptable accuracy: 50 meters.
 - Display a degraded-accuracy warning if GPS accuracy exceeds 100 meters.
 - Cache last known position for up to 10 seconds to handle brief GPS drops.
+- Capture GPS altitude and altitude accuracy when available. GPS altitude uses the WGS84 ellipsoid datum.
+- Resolve observer elevation in this order: manual MSL override, reliable fresh GPS altitude, cached Copernicus GLO-90 terrain elevation, then unavailable.
+- Never silently assume the observer is at sea level. When elevation is unavailable, continue horizontal bearing guidance but label vertical placement as limited.
 
 ### 6.3 Device Orientation
 - Use the `DeviceOrientationEvent` API to read:
@@ -96,7 +99,7 @@ Aviation enthusiasts, curious onlookers, and professionals frequently spot aircr
   - ICAO24 hex identifier
   - Callsign / flight number
   - Latitude, longitude (decimal degrees)
-  - Altitude (feet, barometric preferred; geometric if unavailable)
+  - Barometric and geometric altitude when available, plus explicit ground state
   - Ground speed (knots)
   - Track/heading (degrees true)
   - Aircraft type (ICAO type code, if available)
@@ -109,12 +112,13 @@ For each ADS-B aircraft record, compute whether it falls within the camera's fie
 **Step 1 — Bearing from user to aircraft**
 Compute the great-circle bearing from user's GPS position to the aircraft's reported lat/lon using the haversine formula.
 
-**Step 2 — Elevation angle from user to aircraft**
-```
-slant_range = sqrt(horizontal_distance² + altitude_agl²)
-elevation_angle = arcsin(altitude_agl / slant_range)
-```
-Where `altitude_agl` is aircraft altitude minus an assumed ground elevation (MSL altitude with terrain approximation in v1; SRTM lookup in v2).
+**Step 2 — Apparent elevation angle from user to aircraft**
+- Pair compatible vertical data: reliable GPS WGS84 altitude with ADS-B geometric altitude; otherwise terrain/manual MSL elevation with ADS-B barometric altitude.
+- Calculate spherical-Earth line of sight from observer and aircraft radius vectors rather than using a flat-Earth altitude ratio.
+- Calculate both geometric elevation with physical Earth radius and apparent elevation with standard terrestrial refraction coefficient `k = 0.13`.
+- Use apparent elevation for screen placement and retain geometric elevation for diagnostics.
+- Attach uncertainty from observer/aircraft altitude accuracy and atmospheric variation. De-emphasize near-horizon markers whose uncertainty interval crosses the horizon; do not force airborne markers above it.
+- Terrain-profile occlusion from ridges, buildings, and local obstacles is not modeled in v1.
 
 **Step 3 — Dead reckoning**
 Interpolate the aircraft's current position forward from the last ADS-B ping using reported speed and heading to reduce apparent positional lag.
@@ -188,7 +192,7 @@ Interpolate the aircraft's current position forward from the last ADS-B ping usi
 | Accuracy | Aircraft identification must match the visually observed aircraft in >90% of cases when ADS-B data is fresh (<10s old) and the aircraft is within 25nm. |
 | Latency | End-to-end from launch to first overlay render: <5 seconds on a 4G connection. |
 | Battery | Minimize wake-lock use; pause GPS polling when app is backgrounded. |
-| Privacy | No user location data transmitted to any first-party server. All geospatial computation is client-side. ADS-B API calls include only bounding box coordinates, not the user's precise GPS position. |
+| Privacy | Location is processed locally and sent transiently through same-origin ADS-B and optional terrain-elevation proxies. Proxies validate/round coordinates and do not log or persist them. |
 | Offline | Display a clear "No data connection" state. Show last cached ADS-B data with a staleness warning. |
 | HTTPS | Required for all sensor APIs (geolocation, orientation, camera). App must be served over HTTPS. |
 | Compatibility | iOS Safari 16+, Chrome for Android 110+, Samsung Internet 20+. |
@@ -305,6 +309,9 @@ GET https://opendata.adsb.fi/api/v3/lat/47.6062/lon/-122.3321/dist/50
 - **No analytics, no tracking, no accounts** in v1.
 - User GPS coordinates are used for local computation and transient same-origin ADS-B proxy queries; the proxy does not log or persist them.
 - ADS-B proxy calls round coordinates to four decimal places and forward only the location/radius required by the upstream endpoint.
+- When GPS altitude is unavailable or unreliable, the elevation proxy rounds coordinates to a terrain cell and requests Copernicus GLO-90 elevation through Open-Meteo. Successful cells are cached for 24 hours and are not polled with ADS-B.
+- Observer altitude, altitude accuracy, manual elevation overrides, and calibration data remain on-device.
+- Terrain data attribution: [Open-Meteo](https://open-meteo.com/) and the Copernicus program. Public API use is limited to non-commercial use under 10,000 daily calls unless commercial access is arranged.
 - No cookies beyond session state.
 - If a third-party ADS-B API's terms require disclosure, surface a one-time notice on first use.
 
@@ -313,7 +320,7 @@ GET https://opendata.adsb.fi/api/v3/lat/47.6062/lon/-122.3321/dist/50
 ## 13. Future Enhancements (Out of Scope for v1)
 
 - **v2:** WebXR / AR overlay using the WebXR Device API for more precise screen-space placement.
-- **v2:** SRTM terrain elevation lookup for accurate AGL altitude calculation.
+- **v2:** Terrain-profile line-of-sight and occlusion lookup for ridges and local terrain between observer and aircraft.
 - **v2:** Aircraft photo lookup (Jetphotos or Planespotters.net API).
 - **v2:** Offline mode with pre-cached aircraft type database.
 - **v3:** Social/sharing — screenshot with overlay burned in and aircraft details.
@@ -377,7 +384,7 @@ GET https://opendata.adsb.fi/api/v3/lat/47.6062/lon/-122.3321/dist/50
 **Goal:** Accurate screen-space position computed for every aircraft in range.
 - Move all math into a dedicated Web Worker to keep the main thread free
 - Implement haversine bearing from user GPS to aircraft lat/lon
-- Implement elevation angle from user to aircraft (using barometric altitude, flat-earth approximation for v1)
+- Implement datum-aware observer/aircraft altitude pairing, spherical-Earth elevation, and standard refraction
 - Implement dead reckoning: interpolate aircraft position forward from last ADS-B ping using speed + track
 - Map bearing offset and elevation offset to canvas pixel coordinates using device FOV (default 60° × 45°)
 - Output: per-aircraft `{ x, y, inFov, bearing, elevation, distance }` updated each frame

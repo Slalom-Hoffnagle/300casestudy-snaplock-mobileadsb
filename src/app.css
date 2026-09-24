@@ -66,6 +66,18 @@ a {
   pointer-events: auto;
 }
 
+.dev-horizon {
+  position: absolute;
+  right: 0;
+  left: 0;
+  z-index: 2;
+  height: 2px;
+  background: #ffcf4a;
+  box-shadow: 0 0 8px rgba(255, 207, 74, 0.75);
+  pointer-events: none;
+  transform-origin: center;
+}
+
 .scanner-shell:has(.camera-feed) .sky {
   display: none;
 }
@@ -537,6 +549,19 @@ h1 {
   text-underline-offset: 3px;
 }
 
+.data-attribution {
+  display: grid;
+  gap: 4px;
+  text-align: right;
+}
+
+.detail-warning {
+  margin: 18px 0 0;
+  color: #ffd2b8;
+  font-size: 0.72rem;
+  line-height: 1.45;
+}
+
 .sheet-layer,
 .settings-layer {
   position: fixed;
@@ -742,6 +767,31 @@ h1 {
   margin-top: 30px;
   padding-top: 24px;
   border-top: 1px solid rgba(255, 255, 255, 0.18);
+}
+
+.elevation-settings {
+  display: grid;
+  gap: 12px;
+  margin-top: 30px;
+  padding-top: 24px;
+  border-top: 1px solid rgba(255, 255, 255, 0.18);
+}
+
+.elevation-settings p,
+.elevation-settings small {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.62);
+  font-size: 0.72rem;
+  line-height: 1.5;
+}
+
+.elevation-settings input {
+  min-height: 42px;
+  padding: 0 12px;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  border-radius: 0;
+  background: #152028;
+  color: white;
 }
 
 .calibration-settings p,
@@ -1159,6 +1209,10 @@ h1 {
   }
 
   .app-footer a {
+    text-align: left;
+  }
+
+  .data-attribution {
     text-align: left;
   }
 
