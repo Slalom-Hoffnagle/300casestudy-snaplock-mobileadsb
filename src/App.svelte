@@ -51,7 +51,6 @@
   let selectedAircraft: Aircraft | null = null
   let selectedPosition: AircraftPosition | null = null
   let settingsOpen = false
-  let showInitialGuide = true
   let settings = {
     radiusNm: 50,
     distanceUnit: 'nm',
@@ -217,6 +216,7 @@
       appPhase = 'motion'
       await motionPermission
       appPhase = 'ready'
+      // Keep the camera unobstructed once the permission flow is complete.
       await tick()
       if (videoElement && cameraStream) videoElement.srcObject = cameraStream
       await videoElement?.play()
@@ -552,17 +552,6 @@
     </section>
   {:else if appPhase === 'ready'}
     <section class="viewfinder live-view" aria-labelledby="live-title">
-      {#if showInitialGuide}
-        <button class="guide-dismiss" type="button" aria-label="Clear scanning instructions" onclick={() => (showInitialGuide = false)}>×</button>
-        <div class="reticle" aria-hidden="true">
-          <span></span><span></span><span></span><span></span>
-          <div class="aircraft">✈</div>
-        </div>
-        <p class="eyebrow" id="live-title">Scanning your horizon</p>
-        <p class="lede">Point your camera at the sky to begin.</p>
-      {:else}
-        <button class="guide-restore" type="button" aria-label="Show scanning instructions" onclick={() => (showInitialGuide = true)}>Show guidance</button>
-      {/if}
       <div class="sensor-readout">
         <span><i class:active={orientationAvailable}></i> Motion {orientationAvailable ? 'ready' : 'unavailable'}</span>
         <span><i class:active={locationAccuracy !== null}></i> GPS {locationAccuracy ? `${Math.round(locationAccuracy)}m` : 'locating'}</span>
@@ -601,7 +590,7 @@
     </section>
   {/if}
 
-  <footer class="app-footer">
+  <footer class:live-footer={appPhase === 'ready'} class="app-footer">
     <div class="milestone">
       <span class="milestone-label">Build status</span>
       <strong>{appPhase === 'ready' ? 'Sensors calibrated' : 'M3 sensor stack'}</strong>
