@@ -770,10 +770,28 @@
   <div class="scrim" aria-hidden="true"></div>
 
   <header class="app-header">
-    <a class="brand" href="/" aria-label="SnapLock home">
-      <img src="/snaplock-mark.svg" width="36" height="36" alt="" />
-      <span>SnapLock</span>
-    </a>
+    <div class="brand-stack">
+      <a class="brand" href="/" aria-label="SnapLock home">
+        <img src="/snaplock-mark.svg" width="36" height="36" alt="" />
+        <span>SnapLock</span>
+      </a>
+      <div class="status-panel">
+        <button class="status-toggle" type="button" aria-expanded={statusOpen} onclick={() => (statusOpen = !statusOpen)}>
+          <span class="status-indicator" aria-hidden="true"></span>
+          <span>Status</span>
+        </button>
+        {#if statusOpen}
+          <div class="status-popover" role="dialog" aria-label="Status details">
+            {#each statusItems as item}
+              <div class="status-entry">
+                <span class="status-entry-label">{item.label}</span>
+                <span class:active={item.active} class="status-entry-value">{item.value}</span>
+              </div>
+            {/each}
+          </div>
+        {/if}
+      </div>
+    </div>
     <button class="settings-button" type="button" aria-label="Open settings" onclick={() => (settingsOpen = true)}>
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <path d="M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M6 14v6" />
@@ -801,22 +819,6 @@
     </section>
   {:else if appPhase === 'ready'}
     <section class="viewfinder live-view" aria-labelledby="live-title">
-      <div class="status-panel">
-        <button class="status-toggle" type="button" aria-expanded={statusOpen} onclick={() => (statusOpen = !statusOpen)}>
-          <span class="status-indicator" aria-hidden="true"></span>
-          <span>Status</span>
-        </button>
-        {#if statusOpen}
-          <div class="status-popover" role="dialog" aria-label="Status details">
-            {#each statusItems as item}
-              <div class="status-entry">
-                <span class="status-entry-label">{item.label}</span>
-                <span class:active={item.active} class="status-entry-value">{item.value}</span>
-              </div>
-            {/each}
-          </div>
-        {/if}
-      </div>
       {#if adsbIsStale}
         <p class="data-warning">ADS-B data is {adsbAgeSeconds}s old. Showing the last successful result.</p>
       {:else if adsbState === 'error'}
