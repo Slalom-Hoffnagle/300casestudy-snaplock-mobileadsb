@@ -68,7 +68,7 @@ Aviation enthusiasts, curious onlookers, and professionals frequently spot aircr
 ### 6.1 Camera View
 - Render a live rear camera stream as a full-screen background using the `MediaDevices.getUserMedia` API.
 - Prefer rear-facing camera (`facingMode: "environment"`).
-- Handle portrait and landscape orientation gracefully.
+- Require upright portrait orientation. In landscape, pause the usable camera interface and prompt the user to rotate the device upright.
 - Camera view must not be interrupted by UI chrome; overlays are rendered on top.
 
 ### 6.2 Geolocation
@@ -85,6 +85,9 @@ Aviation enthusiasts, curious onlookers, and professionals frequently spot aircr
   - **Alpha (α):** Compass heading (0–360°, where 0 = North). Represents where the phone is pointing horizontally.
   - **Beta (β):** Front-to-back tilt (-180° to 180°). Used to determine pitch/elevation angle.
   - **Gamma (γ):** Left-to-right tilt. Used for landscape compensation.
+- Treat alpha, beta, and gamma as a coupled intrinsic Z-X′-Y″ rotation. Transform the rear camera's forward and up vectors to derive true camera azimuth, elevation, and roll; do not calculate elevation from beta alone.
+- Prefer `deviceorientationabsolute` when available and suppress relative-orientation events while fresh absolute readings are arriving.
+- Portrait is the only supported device orientation. Landscape compensation is not required.
 - On iOS 13+, explicitly request permission via `DeviceOrientationEvent.requestPermission()` before reading values.
 - Apply magnetic declination correction to convert magnetic north to true north (lookup by lat/lon using a lightweight embedded table or a public API).
 - Smooth orientation readings with a low-pass filter to reduce jitter.
@@ -132,6 +135,8 @@ Interpolate the aircraft's current position forward from the last ADS-B ping usi
 ### 6.6 Camera Field of View (FOV)
 - Default assumption: 60° horizontal × 45° vertical (conservative mid-range smartphone estimate).
 - Allow user to manually calibrate FOV in settings by pointing at a known landmark.
+- Read camera stream dimensions from the active video track/video metadata and compensate configured FOV for `object-fit: cover` cropping in the portrait viewport.
+- Browser camera APIs do not expose focal length or physical FOV consistently; manual FOV values remain authoritative.
 - V2 enhancement: read FOV from the `ImageCapture` API's `getPhotoCapabilities()` or camera track settings where available.
 
 ### 6.7 Aircraft Overlay UI

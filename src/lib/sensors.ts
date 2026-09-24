@@ -41,6 +41,12 @@ export function smoothLinear(previous: number | null, next: number, factor = 0.1
   return previous === null ? next : previous + (next - previous) * factor
 }
 
+export function smoothSignedAngle(previous: number | null, next: number, factor = 0.18) {
+  if (previous === null) return ((next + 180) % 360 + 360) % 360 - 180
+  const delta = ((next - previous + 540) % 360) - 180
+  return ((previous + delta * factor + 180) % 360 + 360) % 360 - 180
+}
+
 export function magneticDeclination(latitude: number, longitude: number) {
   let closest = declinationTable[0]
   let closestDistance = Number.POSITIVE_INFINITY

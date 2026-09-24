@@ -5,6 +5,7 @@
     magneticDeclination,
     smoothAngle,
     smoothLinear,
+    smoothSignedAngle,
     type SensorReading,
   } from './lib/sensors'
   import { AdsbError, fetchNearbyAircraft, type Aircraft } from './lib/adsb'
@@ -22,12 +23,16 @@
     resolveObserverElevation,
   } from './lib/elevation'
   import { fetchTerrainElevation, type TerrainElevationFix } from './lib/elevation-service'
+  import { deriveCameraOrientation } from './lib/orientation'
+  import { effectiveCoverFov } from './lib/camera'
 
   type AppPhase = 'welcome' | 'camera' | 'location' | 'motion' | 'ready' | 'denied'
 
   let appPhase: AppPhase = 'welcome'
   let videoElement: HTMLVideoElement | undefined
   let cameraStream: MediaStream | null = null
+  let cameraWidth: number | null = null
+  let cameraHeight: number | null = null
   let locationWatchId: number | null = null
   let errorMessage = ''
   let locationAccuracy: number | null = null
@@ -77,6 +82,7 @@
   let terrainRequestLatitude: number | null = null
   let terrainRequestLongitude: number | null = null
   let terrainRetryAfter = 0
+  let lastAbsoluteOrientationAt = 0
   let settings = {
     radiusNm: 50,
     distanceUnit: 'nm',
@@ -113,7 +119,14 @@
     : settings.altitudeUnit === 'ft'
       ? String(Math.round(settings.manualElevationMeters / 0.3048))
       : String(Math.round(settings.manualElevationMeters))
-  $: devHorizonTop = 50 + ((90 - sensorReading.pitch + calibration.pitchOffset) / settings.verticalFov) * 100
+  $: effectiveFov = effectiveCoverFov(
+    { horizontal: settings.horizontalFov, vertical: settings.verticalFov },
+    cameraWidth,
+    cameraHeight,
+    window.innerWidth,
+    window.innerHeight,
+  )
+  $: devHorizonTop = 50 + ((sensorReading.pitch + calibration.pitchOffset) / settings.verticalFov) * 100
   $: devHorizonRoll = -(sensorReading.roll + calibration.rollOffset)
 
   function loadSettings() {
@@ -243,6 +256,12 @@
     if (edge) selectPosition(edge)
   }
 
+  function updateCameraDimensions() {
+    if (!videoElement) return
+    cameraWidth = videoElement.videoWidth || cameraWidth
+    cameraHeight = videoElement.videoHeight || cameraHeight
+  }
+
   const phaseCopy: Record<Exclude<AppPhase, 'welcome' | 'ready' | 'denied'>, string> = {
     camera: 'Camera access lets SnapLock see the sky through your phone.',
     location: 'Location finds the aircraft near your current position.',
@@ -250,18 +269,22 @@
   }
 
   function handleOrientation(event: DeviceOrientationEvent) {
-    if (event.alpha === null) return
+    if (event.alpha === null || event.beta === null || event.gamma === null) return
+    const absoluteEvent = event.type === 'deviceorientationabsolute' || event.absolute === true
+    if (!absoluteEvent && Date.now() - lastAbsoluteOrientationAt < 1000) return
+    if (absoluteEvent) lastAbsoluteOrientationAt = Date.now()
 
     const declination = latitude !== null && longitude !== null
       ? magneticDeclination(latitude, longitude)
       : sensorReading.declination
-    const heading = applyDeclination(event.alpha, declination)
+    const cameraOrientation = deriveCameraOrientation(event.alpha, event.beta, event.gamma)
+    const heading = applyDeclination(cameraOrientation.heading, declination)
 
     sensorReading = {
       ...sensorReading,
-      heading: smoothAngle(sensorReading.heading, heading),
-      pitch: smoothLinear(sensorReading.pitch, event.beta ?? sensorReading.pitch),
-      roll: smoothLinear(sensorReading.roll, event.gamma ?? sensorReading.roll),
+      heading: cameraOrientation.headingAvailable ? smoothAngle(sensorReading.heading, heading) : sensorReading.heading,
+      pitch: smoothLinear(sensorReading.pitch, cameraOrientation.elevation),
+      roll: smoothSignedAngle(sensorReading.roll, cameraOrientation.roll),
       declination,
       latitude,
       longitude,
@@ -285,6 +308,7 @@
 
     if ('DeviceOrientationEvent' in window) {
       window.addEventListener('deviceorientation', handleOrientation)
+      window.addEventListener('deviceorientationabsolute', handleOrientation as EventListener)
     }
   }
 
@@ -333,6 +357,9 @@
         audio: false,
         video: { facingMode: { ideal: 'environment' } },
       })
+      const cameraSettings = cameraStream.getVideoTracks()[0]?.getSettings()
+      cameraWidth = cameraSettings?.width ?? null
+      cameraHeight = cameraSettings?.height ?? null
       appPhase = 'location'
       await startLocationWatch()
       appPhase = 'motion'
@@ -342,6 +369,7 @@
       await tick()
       if (videoElement && cameraStream) videoElement.srcObject = cameraStream
       await videoElement?.play()
+      updateCameraDimensions()
       startAdsbPolling()
       startPositioning()
       startOverlay()
@@ -450,8 +478,8 @@
       viewport: {
         width: window.innerWidth,
         height: window.innerHeight,
-        horizontalFov: settings.horizontalFov,
-        verticalFov: settings.verticalFov,
+        horizontalFov: effectiveFov.horizontal,
+        verticalFov: effectiveFov.vertical,
       },
       now: Date.now(),
     }
@@ -632,6 +660,7 @@
     cameraStream?.getTracks().forEach((track) => track.stop())
     if (locationWatchId !== null) navigator.geolocation.clearWatch(locationWatchId)
     window.removeEventListener('deviceorientation', handleOrientation)
+    window.removeEventListener('deviceorientationabsolute', handleOrientation as EventListener)
     document.removeEventListener('visibilitychange', handleVisibilityChange)
     stopAdsbPolling()
     elevationAbortController?.abort()
@@ -655,7 +684,7 @@
 
 <main class="scanner-shell">
   {#if appPhase === 'ready' && cameraStream}
-    <video class="camera-feed" bind:this={videoElement} autoplay muted playsinline></video>
+    <video class="camera-feed" bind:this={videoElement} autoplay muted playsinline onloadedmetadata={updateCameraDimensions}></video>
     <canvas class="overlay-canvas" bind:this={overlayCanvas} onclick={handleOverlayClick} aria-label="Aircraft position overlay"></canvas>
     {#if isDev && showDevHorizon}
       <div class="dev-horizon" style={`top: ${devHorizonTop}%; transform: rotate(${devHorizonRoll}deg)`} aria-hidden="true"></div>
@@ -727,6 +756,8 @@
             <div><dt>Worker</dt><dd>{positioningComputedAt ? 'active' : 'waiting'}</dd></div>
             <div><dt>Observer</dt><dd>{observerElevationText}</dd></div>
             <div><dt>Elevation accuracy</dt><dd>{observerElevation.accuracyMeters === null ? 'unknown' : `±${Math.round(observerElevation.accuracyMeters)}m`}</dd></div>
+            <div><dt>Camera stream</dt><dd>{cameraWidth && cameraHeight ? `${cameraWidth}×${cameraHeight}` : 'unknown'}</dd></div>
+            <div><dt>Effective FOV</dt><dd>{effectiveFov.horizontal.toFixed(1)}° × {effectiveFov.vertical.toFixed(1)}°</dd></div>
             {#if selectedPosition}<div><dt>Apparent target</dt><dd>{selectedPosition.elevation.toFixed(2)}°</dd></div>{/if}
           </dl>
           <button class="debug-toggle" type="button" onclick={() => (showDevHorizon = !showDevHorizon)}>{showDevHorizon ? 'Hide calibrated horizon' : 'Show calibrated horizon'}</button>
@@ -868,4 +899,8 @@
       onCancel={() => (calibrationOpen = false)}
     />
   {/if}
+  <div class="portrait-required" role="alert">
+    <strong>Portrait mode required</strong>
+    <span>Rotate your phone upright to continue tracking aircraft.</span>
+  </div>
 </main>

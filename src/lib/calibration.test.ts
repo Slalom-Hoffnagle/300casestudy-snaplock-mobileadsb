@@ -21,19 +21,19 @@ function samples(heading: number, pitch: number, roll = 0): OrientationSample[] 
 
 describe('calibration captures', () => {
   it('captures horizon pitch and roll offsets from stable samples', () => {
-    const result = captureHorizon(samples(20, 87, 2))
+    const result = captureHorizon(samples(20, 3, 2))
     expect(result.stable).toBe(true)
     expect(result.pitchOffset).toBeCloseTo(-3, 1)
     expect(result.rollOffset).toBeCloseTo(-2, 1)
   })
 
   it('rejects unstable horizon samples', () => {
-    const unstable = Array.from({ length: 15 }, (_, index) => ({ heading: index * 20, pitch: 70 + index, roll: index }))
+    const unstable = Array.from({ length: 15 }, (_, index) => ({ heading: index * 20, pitch: index, roll: index }))
     expect(captureHorizon(unstable).stable).toBe(false)
   })
 
   it('handles heading wraparound while aligning a target', () => {
-    const result = captureTarget(samples(359, 90), 1, 0)
+    const result = captureTarget(samples(359, 0), 1, 0)
     expect(result.stable).toBe(true)
     expect(result.headingOffset).toBeCloseTo(2, 1)
   })
@@ -55,6 +55,10 @@ describe('landmark and persistence validation', () => {
     expect(parseCalibration(JSON.stringify({ ...DEFAULT_CALIBRATION, headingOffset: 90 }))).toBeNull()
   })
 
+  it('rejects beta-only calibration offsets from the previous orientation model', () => {
+    expect(parseCalibration(JSON.stringify({ ...DEFAULT_CALIBRATION, version: 1 }))).toBeNull()
+  })
+
   it('marks old calibration stale', () => {
     const calibration = { ...DEFAULT_CALIBRATION, calibratedAt: 1 }
     expect(calibrationIsStale(calibration, 24 * 60 * 60 * 1000 + 2)).toBe(true)
@@ -65,7 +69,7 @@ describe('positioning integration', () => {
   it('applies heading calibration before FOV mapping', () => {
     const input: PositioningInput = {
       aircraft: [{ icao24: 'test', callsign: 'TEST', latitude: 1, longitude: 0, altBaro: 10000, altGeom: null, groundSpeed: null, track: null, lastSeen: 0 }],
-      user: { latitude: 0, longitude: 0, heading: 10, pitch: 90 },
+      user: { latitude: 0, longitude: 0, heading: 10, pitch: 0 },
       viewport: { width: 600, height: 450, horizontalFov: 60, verticalFov: 45 },
       now: 0,
     }
@@ -78,7 +82,7 @@ describe('positioning integration', () => {
   it('applies roll calibration to projected coordinates', () => {
     const input: PositioningInput = {
       aircraft: [{ icao24: 'east', callsign: 'EAST', latitude: 0, longitude: 0.1, altBaro: 10000, altGeom: null, groundSpeed: null, track: null, lastSeen: 0 }],
-      user: { latitude: 0, longitude: 0, heading: 80, pitch: 90, roll: 10 },
+      user: { latitude: 0, longitude: 0, heading: 80, pitch: 0, roll: 10 },
       viewport: { width: 600, height: 450, horizontalFov: 60, verticalFov: 45 },
       now: 0,
     }

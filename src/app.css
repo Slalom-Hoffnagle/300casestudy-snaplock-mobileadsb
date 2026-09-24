@@ -78,6 +78,35 @@ a {
   transform-origin: center;
 }
 
+.portrait-required {
+  display: none;
+}
+
+@media (orientation: landscape) {
+  .portrait-required {
+    position: fixed;
+    inset: 0;
+    z-index: 20;
+    display: grid;
+    place-content: center;
+    gap: 10px;
+    padding: 28px;
+    background: #152028;
+    color: white;
+    text-align: center;
+  }
+
+  .portrait-required strong {
+    color: var(--signal);
+    font-size: 1.4rem;
+    text-transform: uppercase;
+  }
+
+  .portrait-required span {
+    color: rgba(255, 255, 255, 0.72);
+  }
+}
+
 .scanner-shell:has(.camera-feed) .sky {
   display: none;
 }

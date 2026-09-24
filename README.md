@@ -10,7 +10,7 @@ Camera, location, and motion APIs require HTTPS in production. Local development
 
 ## M3 Sensor Stack
 
-The ready view consumes live device orientation values, applies a low-pass filter to heading, pitch, and roll, and corrects magnetic heading with a bundled coarse declination table. GPS accuracy is shown in the live status row; fixes over 100 meters surface an outdoor-signal warning. In development builds, use **Show sensor data** to inspect the smoothed readings and declination correction.
+The ready view treats alpha, beta, and gamma as a coupled 3D rotation and derives the rear camera's true azimuth, elevation, and roll from its transformed forward/up vectors. It prefers absolute orientation events, applies robust smoothing and magnetic declination, and supports upright portrait only. GPS accuracy is shown in the live status row; fixes over 100 meters surface an outdoor-signal warning.
 
 ## M4 ADS-B Data
 
@@ -21,6 +21,8 @@ Polling is single-flight: a new request cannot overlap an active request. It pau
 ## M5 Positioning Engine
 
 `src/lib/positioning.worker.ts` keeps screen-space math off the main thread. Each frame it dead-reckons aircraft forward from speed and track, computes haversine distance and bearing, derives curvature/refraction-aware apparent elevation, maps offsets through the default 60° by 45° FOV, and returns clamped edge coordinates for aircraft outside the frame. Worker requests are single-flight and pause when the page is hidden; M6 consumes the returned positions for rendering.
+
+The camera stream's intrinsic dimensions are used to compensate FOV for portrait `object-fit: cover` cropping. Browser APIs do not expose reliable hardware focal length/FOV, so the configured FOV remains manually adjustable in Settings.
 
 ## Observer Elevation
 

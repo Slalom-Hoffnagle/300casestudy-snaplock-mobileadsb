@@ -162,7 +162,7 @@ function clampToEdge(x: number, y: number, width: number, height: number) {
 export function calculatePositions(input: PositioningInput): PositioningOutput {
   const { user, viewport, now } = input
   const calibratedHeading = normalizeAngle(user.heading + (user.headingOffset ?? 0))
-  const cameraElevation = 90 - user.pitch + (user.pitchOffset ?? 0)
+  const cameraElevation = user.pitch + (user.pitchOffset ?? 0)
   const rollRadians = -((user.roll ?? 0) + (user.rollOffset ?? 0)) * Math.PI / 180
   const observerElevation: ObserverElevation = {
     meters: user.elevationMeters ?? null,

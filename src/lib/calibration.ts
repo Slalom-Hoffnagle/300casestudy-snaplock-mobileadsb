@@ -4,7 +4,7 @@ export type CalibrationMethod = 'automatic' | 'horizon' | 'aircraft' | 'moon' | 
 export type CalibrationQuality = 'uncalibrated' | 'automatic' | 'fair' | 'good' | 'excellent' | 'stale'
 
 export type SensorCalibration = {
-  version: 1
+  version: 2
   headingOffset: number
   pitchOffset: number
   rollOffset: number
@@ -42,7 +42,7 @@ export type LandmarkValidation = {
 export const CALIBRATION_STORAGE_KEY = 'snaplock-calibration'
 export const CALIBRATION_MAX_AGE_MS = 24 * 60 * 60 * 1000
 export const DEFAULT_CALIBRATION: SensorCalibration = {
-  version: 1,
+  version: 2,
   headingOffset: 0,
   pitchOffset: 0,
   rollOffset: 0,
@@ -80,7 +80,7 @@ function circularDeviation(values: number[]) {
 
 export function captureHorizon(samples: OrientationSample[]): CalibrationCapture {
   if (samples.length < 10) return { headingOffset: 0, pitchOffset: 0, rollOffset: 0, headingDeviation: Infinity, pitchDeviation: Infinity, stable: false }
-  const cameraElevations = samples.map((sample) => 90 - sample.pitch)
+  const cameraElevations = samples.map((sample) => sample.pitch)
   const rolls = samples.map((sample) => sample.roll)
   const headingDeviation = circularDeviation(samples.map((sample) => sample.heading))
   const pitchDeviation = standardDeviation(cameraElevations)
@@ -103,7 +103,7 @@ export function captureTarget(
 ): CalibrationCapture {
   if (samples.length < 10) return { headingOffset: 0, pitchOffset: 0, rollOffset: 0, headingDeviation: Infinity, pitchDeviation: Infinity, stable: false }
   const headings = samples.map((sample) => sample.heading)
-  const cameraElevations = samples.map((sample) => 90 - sample.pitch)
+  const cameraElevations = samples.map((sample) => sample.pitch)
   const headingDeviation = circularDeviation(headings)
   const pitchDeviation = standardDeviation(cameraElevations)
   const stable = headingDeviation <= 3 && pitchDeviation <= 2
@@ -145,7 +145,7 @@ export function parseCalibration(value: string | null): SensorCalibration | null
   if (!value) return null
   try {
     const parsed = JSON.parse(value) as Partial<SensorCalibration>
-    if (parsed.version !== 1 || typeof parsed.headingOffset !== 'number' || typeof parsed.pitchOffset !== 'number' || typeof parsed.rollOffset !== 'number') return null
+    if (parsed.version !== 2 || typeof parsed.headingOffset !== 'number' || typeof parsed.pitchOffset !== 'number' || typeof parsed.rollOffset !== 'number') return null
     if (!Number.isFinite(parsed.headingOffset) || !Number.isFinite(parsed.pitchOffset) || !Number.isFinite(parsed.rollOffset)) return null
     if (Math.abs(parsed.headingOffset) > 45 || Math.abs(parsed.pitchOffset) > 45 || Math.abs(parsed.rollOffset) > 45) return null
     return { ...DEFAULT_CALIBRATION, ...parsed }
