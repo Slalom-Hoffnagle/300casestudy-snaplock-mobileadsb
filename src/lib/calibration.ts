@@ -1,10 +1,11 @@
 import { haversineDistance, signedAngleDifference } from './positioning'
+import type { HeadingDatum, HeadingSource } from './orientation-source'
 
-export type CalibrationMethod = 'automatic' | 'horizon' | 'aircraft' | 'moon' | 'landmark' | 'known-bearing'
+export type CalibrationMethod = 'automatic' | 'horizon' | 'aircraft' | 'moon' | 'landmark' | 'known-bearing' | 'two-reference'
 export type CalibrationQuality = 'uncalibrated' | 'automatic' | 'fair' | 'good' | 'excellent' | 'stale'
 
 export type SensorCalibration = {
-  version: 2
+  version: 3
   headingOffset: number
   pitchOffset: number
   rollOffset: number
@@ -15,6 +16,11 @@ export type SensorCalibration = {
   longitude: number | null
   headingDeviation: number | null
   pitchDeviation: number | null
+  orientationSource: HeadingSource | 'unknown'
+  headingDatum: HeadingDatum | 'unknown'
+  headingAccuracy: number | null
+  headingPolarity: 1 | -1
+  twoReferenceVerified: boolean
 }
 
 export type OrientationSample = {
@@ -30,6 +36,15 @@ export type CalibrationCapture = {
   headingDeviation: number
   pitchDeviation: number
   stable: boolean
+  measuredHeading: number | null
+}
+
+export type HeadingModelFit = {
+  valid: boolean
+  polarity: 1 | -1
+  offset: number
+  residual: number
+  reason: string | null
 }
 
 export type LandmarkValidation = {
@@ -42,7 +57,7 @@ export type LandmarkValidation = {
 export const CALIBRATION_STORAGE_KEY = 'snaplock-calibration'
 export const CALIBRATION_MAX_AGE_MS = 24 * 60 * 60 * 1000
 export const DEFAULT_CALIBRATION: SensorCalibration = {
-  version: 2,
+  version: 3,
   headingOffset: 0,
   pitchOffset: 0,
   rollOffset: 0,
@@ -53,6 +68,11 @@ export const DEFAULT_CALIBRATION: SensorCalibration = {
   longitude: null,
   headingDeviation: null,
   pitchDeviation: null,
+  orientationSource: 'unknown',
+  headingDatum: 'unknown',
+  headingAccuracy: null,
+  headingPolarity: 1,
+  twoReferenceVerified: false,
 }
 
 function mean(values: number[]) {
@@ -79,7 +99,7 @@ function circularDeviation(values: number[]) {
 }
 
 export function captureHorizon(samples: OrientationSample[]): CalibrationCapture {
-  if (samples.length < 10) return { headingOffset: 0, pitchOffset: 0, rollOffset: 0, headingDeviation: Infinity, pitchDeviation: Infinity, stable: false }
+  if (samples.length < 10) return { headingOffset: 0, pitchOffset: 0, rollOffset: 0, headingDeviation: Infinity, pitchDeviation: Infinity, stable: false, measuredHeading: null }
   const cameraElevations = samples.map((sample) => sample.pitch)
   const rolls = samples.map((sample) => sample.roll)
   const headingDeviation = circularDeviation(samples.map((sample) => sample.heading))
@@ -93,6 +113,7 @@ export function captureHorizon(samples: OrientationSample[]): CalibrationCapture
     headingDeviation,
     pitchDeviation: Math.max(pitchDeviation, rollDeviation),
     stable,
+    measuredHeading: circularMean(samples.map((sample) => sample.heading)),
   }
 }
 
@@ -101,7 +122,7 @@ export function captureTarget(
   targetBearing: number,
   targetElevation: number,
 ): CalibrationCapture {
-  if (samples.length < 10) return { headingOffset: 0, pitchOffset: 0, rollOffset: 0, headingDeviation: Infinity, pitchDeviation: Infinity, stable: false }
+  if (samples.length < 10) return { headingOffset: 0, pitchOffset: 0, rollOffset: 0, headingDeviation: Infinity, pitchDeviation: Infinity, stable: false, measuredHeading: null }
   const headings = samples.map((sample) => sample.heading)
   const cameraElevations = samples.map((sample) => sample.pitch)
   const headingDeviation = circularDeviation(headings)
@@ -115,7 +136,39 @@ export function captureTarget(
     headingDeviation,
     pitchDeviation,
     stable,
+    measuredHeading,
   }
+}
+
+export function fitTwoReferenceHeading(
+  first: { measured: number; target: number },
+  second: { measured: number; target: number },
+): HeadingModelFit {
+  const separation = Math.abs(signedAngleDifference(second.target, first.target))
+  if (separation < 60 || separation > 120) {
+    return { valid: false, polarity: 1, offset: 0, residual: Infinity, reason: 'References must be separated by 60 to 120 degrees.' }
+  }
+
+  const evaluate = (polarity: 1 | -1) => {
+    const firstOffset = normalizeCalibrationAngle(first.target - polarity * first.measured)
+    const secondOffset = normalizeCalibrationAngle(second.target - polarity * second.measured)
+    const offset = circularMean([firstOffset, secondOffset])
+    const firstResidual = Math.abs(signedAngleDifference(first.target, normalizeCalibrationAngle(polarity * first.measured + offset)))
+    const secondResidual = Math.abs(signedAngleDifference(second.target, normalizeCalibrationAngle(polarity * second.measured + offset)))
+    return { polarity, offset: signedAngleDifference(offset, 0), residual: Math.max(firstResidual, secondResidual) }
+  }
+  const normal = evaluate(1)
+  const reversed = evaluate(-1)
+  const best = normal.residual <= reversed.residual ? normal : reversed
+  return {
+    ...best,
+    valid: best.residual <= 5,
+    reason: best.residual <= 5 ? null : 'Heading readings do not agree across both references.',
+  }
+}
+
+function normalizeCalibrationAngle(value: number) {
+  return ((value % 360) + 360) % 360
 }
 
 export function scoreCapture(capture: CalibrationCapture): CalibrationQuality {
@@ -145,9 +198,9 @@ export function parseCalibration(value: string | null): SensorCalibration | null
   if (!value) return null
   try {
     const parsed = JSON.parse(value) as Partial<SensorCalibration>
-    if (parsed.version !== 2 || typeof parsed.headingOffset !== 'number' || typeof parsed.pitchOffset !== 'number' || typeof parsed.rollOffset !== 'number') return null
+    if (parsed.version !== 3 || typeof parsed.headingOffset !== 'number' || typeof parsed.pitchOffset !== 'number' || typeof parsed.rollOffset !== 'number') return null
     if (!Number.isFinite(parsed.headingOffset) || !Number.isFinite(parsed.pitchOffset) || !Number.isFinite(parsed.rollOffset)) return null
-    if (Math.abs(parsed.headingOffset) > 45 || Math.abs(parsed.pitchOffset) > 45 || Math.abs(parsed.rollOffset) > 45) return null
+    if (Math.abs(parsed.headingOffset) > 180 || Math.abs(parsed.pitchOffset) > 45 || Math.abs(parsed.rollOffset) > 45) return null
     return { ...DEFAULT_CALIBRATION, ...parsed }
   } catch {
     return null

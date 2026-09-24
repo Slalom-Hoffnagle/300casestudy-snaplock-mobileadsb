@@ -5,6 +5,7 @@ import {
   type ObserverElevation,
   type ObserverElevationSource,
 } from './elevation'
+import type { CameraFrame, Vector3 } from './orientation'
 
 export type PositioningAircraft = {
   icao24: string
@@ -28,8 +29,10 @@ export type PositioningInput = {
     pitch: number
     roll?: number
     headingOffset?: number
+    headingPolarity?: 1 | -1
     pitchOffset?: number
     rollOffset?: number
+    cameraFrame?: CameraFrame
     elevationMeters?: number | null
     elevationSource?: ObserverElevationSource
     elevationConfidence?: AltitudeConfidence
@@ -159,9 +162,23 @@ function clampToEdge(x: number, y: number, width: number, height: number) {
   }
 }
 
+function dot(left: Vector3, right: Vector3) {
+  return left.x * right.x + left.y * right.y + left.z * right.z
+}
+
+function targetDirection(bearing: number, elevation: number): Vector3 {
+  const bearingRadians = toRadians(bearing)
+  const elevationRadians = toRadians(elevation)
+  return {
+    x: Math.cos(elevationRadians) * Math.sin(bearingRadians),
+    y: Math.cos(elevationRadians) * Math.cos(bearingRadians),
+    z: Math.sin(elevationRadians),
+  }
+}
+
 export function calculatePositions(input: PositioningInput): PositioningOutput {
   const { user, viewport, now } = input
-  const calibratedHeading = normalizeAngle(user.heading + (user.headingOffset ?? 0))
+  const calibratedHeading = normalizeAngle((user.headingPolarity ?? 1) * user.heading + (user.headingOffset ?? 0))
   const cameraElevation = user.pitch + (user.pitchOffset ?? 0)
   const rollRadians = -((user.roll ?? 0) + (user.rollOffset ?? 0)) * Math.PI / 180
   const observerElevation: ObserverElevation = {
@@ -184,11 +201,24 @@ export function calculatePositions(input: PositioningInput): PositioningOutput {
       const elevation = elevationSolution.apparentDegrees ?? 0
       const horizontalOffset = signedAngleDifference(bearing, calibratedHeading)
       const verticalOffset = elevation - cameraElevation
-      const projectedX = horizontalOffset / viewport.horizontalFov * viewport.width
-      const projectedY = -verticalOffset / viewport.verticalFov * viewport.height
-      const x = viewport.width / 2 + projectedX * Math.cos(rollRadians) - projectedY * Math.sin(rollRadians)
-      const y = viewport.height / 2 + projectedX * Math.sin(rollRadians) + projectedY * Math.cos(rollRadians)
-      const inFov = verticalAvailable && x >= 0 && x <= viewport.width && y >= 0 && y <= viewport.height
+      const legacyProjectedX = horizontalOffset / viewport.horizontalFov * viewport.width
+      const legacyProjectedY = -verticalOffset / viewport.verticalFov * viewport.height
+      let x = viewport.width / 2 + legacyProjectedX * Math.cos(rollRadians) - legacyProjectedY * Math.sin(rollRadians)
+      let y = viewport.height / 2 + legacyProjectedX * Math.sin(rollRadians) + legacyProjectedY * Math.cos(rollRadians)
+      let cameraDepth = 1
+      if (user.cameraFrame && verticalAvailable) {
+        const target = targetDirection(bearing, elevation)
+        const cameraX = dot(target, user.cameraFrame.right)
+        const cameraY = dot(target, user.cameraFrame.up)
+        cameraDepth = dot(target, user.cameraFrame.forward)
+        if (cameraDepth > 0.001) {
+          const focalX = viewport.width / (2 * Math.tan(toRadians(viewport.horizontalFov) / 2))
+          const focalY = viewport.height / (2 * Math.tan(toRadians(viewport.verticalFov) / 2))
+          x = viewport.width / 2 + focalX * cameraX / cameraDepth
+          y = viewport.height / 2 - focalY * cameraY / cameraDepth
+        }
+      }
+      const inFov = verticalAvailable && cameraDepth > 0.001 && x >= 0 && x <= viewport.width && y >= 0 && y <= viewport.height
       const edge = clampToEdge(x, y, viewport.width, viewport.height)
       const distanceScale = Math.max(0.55, Math.min(1, 1 - distance / 100))
 

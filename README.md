@@ -10,7 +10,9 @@ Camera, location, and motion APIs require HTTPS in production. Local development
 
 ## M3 Sensor Stack
 
-The ready view treats alpha, beta, and gamma as a coupled 3D rotation and derives the rear camera's true azimuth, elevation, and roll from its transformed forward/up vectors. It prefers absolute orientation events, applies robust smoothing and magnetic declination, and supports upright portrait only. GPS accuracy is shown in the live status row; fixes over 100 meters surface an outdoor-signal warning.
+The ready view treats alpha, beta, and gamma as a coupled 3D rotation. On iOS/WebKit it prefers `webkitCompassHeading`; elsewhere it prefers absolute alpha and falls back to relative heading with a warning. Heading datum is tracked so magnetic declination is applied exactly once. Upright portrait is required.
+
+Aircraft direction vectors are projected directly through the camera's orthonormal right/up/forward basis. This avoids the former post-projection roll rotation, where small pitch changes could create large horizontal marker movement.
 
 ## M4 ADS-B Data
 
@@ -41,6 +43,8 @@ The ready state adds a device-pixel-ratio-aware canvas above the camera. In-fram
 ## Sensor Calibration
 
 Open **Settings → Calibrate sensors** after enabling camera, location, and motion. Horizon alignment is optional. Heading can use the automatic corrected compass or be refined against a visible tracked aircraft, the Moon, a map-selected landmark, or a known true bearing. Calibration offsets and quality are stored locally and can be reset independently from display settings.
+
+One-reference heading calibration is marked unverified. Use **Verify heading direction** with two visible true bearings separated by 60–120° to detect normal versus reversed heading conventions. Opposite 180° references are intentionally rejected.
 
 Landmark calibration loads Leaflet only when opened and displays OpenStreetMap attribution on the map. Moon calibration uses SunCalc locally; no location or calibration data is sent to either library.
 

@@ -4,11 +4,13 @@ import {
   calibrationIsStale,
   captureHorizon,
   captureTarget,
+  fitTwoReferenceHeading,
   parseCalibration,
   validateLandmark,
   type OrientationSample,
 } from './calibration'
 import { calculatePositions, type PositioningInput } from './positioning'
+import { cameraFrameFromAngles } from './orientation'
 import { cardinalDirection, getMoonTarget } from './calibration/moon'
 
 function samples(heading: number, pitch: number, roll = 0): OrientationSample[] {
@@ -52,16 +54,35 @@ describe('landmark and persistence validation', () => {
 
   it('parses valid calibration and rejects excessive offsets', () => {
     expect(parseCalibration(JSON.stringify(DEFAULT_CALIBRATION))).not.toBeNull()
-    expect(parseCalibration(JSON.stringify({ ...DEFAULT_CALIBRATION, headingOffset: 90 }))).toBeNull()
+    expect(parseCalibration(JSON.stringify({ ...DEFAULT_CALIBRATION, headingOffset: 181 }))).toBeNull()
   })
 
   it('rejects beta-only calibration offsets from the previous orientation model', () => {
-    expect(parseCalibration(JSON.stringify({ ...DEFAULT_CALIBRATION, version: 1 }))).toBeNull()
+    expect(parseCalibration(JSON.stringify({ ...DEFAULT_CALIBRATION, version: 2 }))).toBeNull()
   })
 
   it('marks old calibration stale', () => {
     const calibration = { ...DEFAULT_CALIBRATION, calibratedAt: 1 }
     expect(calibrationIsStale(calibration, 24 * 60 * 60 * 1000 + 2)).toBe(true)
+  })
+})
+
+describe('two-reference heading model', () => {
+  it('fits a normal heading convention', () => {
+    const result = fitTwoReferenceHeading({ measured: 20, target: 30 }, { measured: 100, target: 110 })
+    expect(result).toMatchObject({ valid: true, polarity: 1 })
+    expect(result.offset).toBeCloseTo(10, 5)
+  })
+
+  it('detects a reversed heading convention', () => {
+    const result = fitTwoReferenceHeading({ measured: 10, target: 100 }, { measured: 290, target: 180 })
+    expect(result).toMatchObject({ valid: true, polarity: -1 })
+    expect(result.offset).toBeCloseTo(110, 5)
+  })
+
+  it('rejects opposite references because polarity is ambiguous', () => {
+    const result = fitTwoReferenceHeading({ measured: 0, target: 0 }, { measured: 180, target: 180 })
+    expect(result.valid).toBe(false)
   })
 })
 
@@ -89,6 +110,44 @@ describe('positioning integration', () => {
     const tilted = calculatePositions(input).positions[0]
     const leveled = calculatePositions({ ...input, user: { ...input.user, rollOffset: -10 } }).positions[0]
     expect(leveled.y).not.toBeCloseTo(tilted.y, 0)
+  })
+
+  it('keeps horizontal position fixed during pitch-only camera motion', () => {
+    const input: PositioningInput = {
+      aircraft: [{ icao24: 'north', callsign: 'NORTH', latitude: 0.1, longitude: 0, altBaro: null, altGeom: 10_000, groundSpeed: null, track: null, lastSeen: 0 }],
+      user: {
+        latitude: 0,
+        longitude: 0,
+        heading: 0,
+        pitch: 0,
+        elevationMeters: 0,
+        elevationSource: 'gps',
+        elevationConfidence: 'high',
+        elevationAccuracyMeters: 5,
+        elevationTimestamp: 0,
+        cameraFrame: cameraFrameFromAngles(0, -10, 0),
+      },
+      viewport: { width: 600, height: 900, horizontalFov: 60, verticalFov: 45 },
+      now: 0,
+    }
+    const down = calculatePositions(input).positions[0]
+    const up = calculatePositions({ ...input, user: { ...input.user, cameraFrame: cameraFrameFromAngles(0, 10, 0) } }).positions[0]
+    expect(down.x).toBeCloseTo(300, 5)
+    expect(up.x).toBeCloseTo(300, 5)
+    expect(down.y).not.toBeCloseTo(up.y, 0)
+  })
+
+  it('keeps behind-camera targets finite and out of FOV', () => {
+    const input: PositioningInput = {
+      aircraft: [{ icao24: 'south', callsign: 'SOUTH', latitude: -0.1, longitude: 0, altBaro: null, altGeom: 10_000, groundSpeed: null, track: null, lastSeen: 0 }],
+      user: { latitude: 0, longitude: 0, heading: 0, pitch: 0, elevationMeters: 0, elevationSource: 'gps', elevationConfidence: 'high', elevationAccuracyMeters: 5, elevationTimestamp: 0, cameraFrame: cameraFrameFromAngles(0, 0, 0) },
+      viewport: { width: 600, height: 900, horizontalFov: 60, verticalFov: 45 },
+      now: 0,
+    }
+    const position = calculatePositions(input).positions[0]
+    expect(position.inFov).toBe(false)
+    expect(Number.isFinite(position.edgeX)).toBe(true)
+    expect(Number.isFinite(position.edgeY)).toBe(true)
   })
 })
 

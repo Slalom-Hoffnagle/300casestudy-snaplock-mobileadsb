@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onDestroy, onMount, tick } from 'svelte'
   import {
-    applyDeclination,
     magneticDeclination,
+    normalizeAngle,
     smoothAngle,
     smoothLinear,
     smoothSignedAngle,
@@ -23,7 +23,8 @@
     resolveObserverElevation,
   } from './lib/elevation'
   import { fetchTerrainElevation, type TerrainElevationFix } from './lib/elevation-service'
-  import { deriveCameraOrientation } from './lib/orientation'
+  import { cameraFrameFromAngles, deriveCameraOrientation } from './lib/orientation'
+  import { OrientationSourceAdapter, resolveTrueHeading, type HeadingDatum, type HeadingSource } from './lib/orientation-source'
   import { effectiveCoverFov } from './lib/camera'
 
   type AppPhase = 'welcome' | 'camera' | 'location' | 'motion' | 'ready' | 'denied'
@@ -82,7 +83,25 @@
   let terrainRequestLatitude: number | null = null
   let terrainRequestLongitude: number | null = null
   let terrainRetryAfter = 0
-  let lastAbsoluteOrientationAt = 0
+  const orientationSourceAdapter = new OrientationSourceAdapter()
+  let orientationSource: HeadingSource | 'unavailable' = 'unavailable'
+  let orientationDatum: HeadingDatum | 'unknown' = 'unknown'
+  let orientationAccuracy: number | null = null
+  let rawOrientation = { alpha: 0, beta: 0, gamma: 0 }
+  let diagnosticsRecording = false
+  let orientationDiagnostics: Array<{
+    timestamp: number
+    alpha: number
+    beta: number
+    gamma: number
+    source: HeadingSource
+    datum: HeadingDatum
+    heading: number
+    elevation: number
+    roll: number
+    markerX: number | null
+    markerY: number | null
+  }> = []
   let settings = {
     radiusNm: 50,
     distanceUnit: 'nm',
@@ -102,6 +121,10 @@
     ? haversineDistance(calibration.latitude, calibration.longitude, latitude, longitude) > 50
     : false
   $: calibrationStale = calibrationIsStale(calibration, currentTime) || calibrationLocationStale
+  $: calibrationSourceChanged = calibration.calibratedAt > 0
+    && calibration.orientationSource !== 'unknown'
+    && orientationSource !== 'unavailable'
+    && calibration.orientationSource !== orientationSource
   $: observerElevation = resolveObserverElevation({
     manualMeters: settings.manualElevationMeters,
     gpsMeters: sensorReading.altitude,
@@ -269,27 +292,63 @@
   }
 
   function handleOrientation(event: DeviceOrientationEvent) {
-    if (event.alpha === null || event.beta === null || event.gamma === null) return
-    const absoluteEvent = event.type === 'deviceorientationabsolute' || event.absolute === true
-    if (!absoluteEvent && Date.now() - lastAbsoluteOrientationAt < 1000) return
-    if (absoluteEvent) lastAbsoluteOrientationAt = Date.now()
+    if (window.matchMedia('(orientation: landscape)').matches) return
+    const sample = orientationSourceAdapter.process(event)
+    if (!sample) return
 
     const declination = latitude !== null && longitude !== null
       ? magneticDeclination(latitude, longitude)
       : sensorReading.declination
-    const cameraOrientation = deriveCameraOrientation(event.alpha, event.beta, event.gamma)
-    const heading = applyDeclination(cameraOrientation.heading, declination)
+    const cameraOrientation = deriveCameraOrientation(sample.alpha, sample.beta, sample.gamma)
+    const heading = resolveTrueHeading(sample.heading, sample.datum, declination)
+    const smoothedHeading = cameraOrientation.headingAvailable ? smoothAngle(sensorReading.heading, heading) : sensorReading.heading
+    const smoothedElevation = smoothLinear(sensorReading.pitch, cameraOrientation.elevation)
+    const smoothedRoll = smoothSignedAngle(sensorReading.roll, cameraOrientation.roll)
 
     sensorReading = {
       ...sensorReading,
-      heading: cameraOrientation.headingAvailable ? smoothAngle(sensorReading.heading, heading) : sensorReading.heading,
-      pitch: smoothLinear(sensorReading.pitch, cameraOrientation.elevation),
-      roll: smoothSignedAngle(sensorReading.roll, cameraOrientation.roll),
+      heading: smoothedHeading,
+      pitch: smoothedElevation,
+      roll: smoothedRoll,
       declination,
       latitude,
       longitude,
     }
+    orientationSource = sample.source
+    orientationDatum = sample.datum
+    orientationAccuracy = sample.headingAccuracy
+    rawOrientation = { alpha: sample.alpha, beta: sample.beta, gamma: sample.gamma }
+    if (diagnosticsRecording) {
+      orientationDiagnostics = [...orientationDiagnostics.slice(-299), {
+        timestamp: sample.timestamp,
+        alpha: sample.alpha,
+        beta: sample.beta,
+        gamma: sample.gamma,
+        source: sample.source,
+        datum: sample.datum,
+        heading: smoothedHeading,
+        elevation: smoothedElevation,
+        roll: smoothedRoll,
+        markerX: selectedPosition?.x ?? null,
+        markerY: selectedPosition?.y ?? null,
+      }]
+    }
     orientationAvailable = true
+  }
+
+  function toggleDiagnosticsRecording() {
+    diagnosticsRecording = !diagnosticsRecording
+    if (diagnosticsRecording) orientationDiagnostics = []
+  }
+
+  function exportOrientationDiagnostics() {
+    const blob = new Blob([JSON.stringify({ exportedAt: Date.now(), samples: orientationDiagnostics }, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `snaplock-orientation-${Date.now()}.json`
+    link.click()
+    URL.revokeObjectURL(url)
   }
 
   async function requestMotionPermission() {
@@ -447,6 +506,11 @@
 
   function getPositioningInput(): PositioningInput | null {
     if (latitude === null || longitude === null) return null
+    const calibratedCameraFrame = cameraFrameFromAngles(
+      normalizeAngle(calibration.headingPolarity * sensorReading.heading + calibration.headingOffset),
+      sensorReading.pitch + calibration.pitchOffset,
+      sensorReading.roll + calibration.rollOffset,
+    )
     return {
       aircraft: aircraft.map(({ icao24, callsign, latitude: aircraftLatitude, longitude: aircraftLongitude, altBaro, altGeom, onGround, groundSpeed, track, lastSeen }) => ({
         icao24,
@@ -467,8 +531,10 @@
         pitch: sensorReading.pitch,
         roll: sensorReading.roll,
         headingOffset: calibration.headingOffset,
+        headingPolarity: calibration.headingPolarity,
         pitchOffset: calibration.pitchOffset,
         rollOffset: calibration.rollOffset,
+        cameraFrame: calibratedCameraFrame,
         elevationMeters: observerElevation.meters,
         elevationSource: observerElevation.source,
         elevationConfidence: observerElevation.confidence,
@@ -724,10 +790,11 @@
     <section class="viewfinder live-view" aria-labelledby="live-title">
       <div class="sensor-readout">
         <span><i class:active={orientationAvailable}></i> Motion {orientationAvailable ? 'ready' : 'unavailable'}</span>
+        <span><i class:active={orientationDatum !== 'relative' && orientationDatum !== 'unknown'}></i> Heading {orientationSource}</span>
         <span><i class:active={locationAccuracy !== null}></i> GPS {locationAccuracy ? `${Math.round(locationAccuracy)}m` : 'locating'}</span>
         <span><i class:active={adsbState === 'fresh' && !adsbIsStale}></i> ADS-B {adsbState === 'loading' ? 'loading' : `${aircraft.length} nearby`}</span>
         <span><i class:active={positioningComputedAt !== null}></i> View {inFovCount} in frame</span>
-        <span><i class:active={calibration.quality !== 'uncalibrated' && !calibrationStale}></i> Calibration {calibrationStale ? 'stale' : calibration.quality}</span>
+        <span><i class:active={calibration.quality !== 'uncalibrated' && !calibrationStale && !calibrationSourceChanged}></i> Calibration {calibrationSourceChanged ? 'source changed' : calibrationStale ? 'stale' : calibration.quality}</span>
         <span><i class:active={observerElevation.source !== 'unavailable'}></i> Elevation {observerElevation.source}</span>
       </div>
       {#if adsbIsStale}
@@ -743,6 +810,15 @@
       {:else if terrainElevationError}
         <p class="accuracy-warning">{terrainElevationError}</p>
       {/if}
+      {#if orientationDatum === 'relative'}
+        <p class="accuracy-warning">Heading is relative to app startup. Use landmark or known-bearing calibration before identifying aircraft.</p>
+      {/if}
+      {#if orientationSource === 'webkit-compass' && orientationAccuracy !== null && orientationAccuracy > 20}
+        <p class="accuracy-warning">Compass accuracy is ±{orientationAccuracy.toFixed(0)}°. Move away from metal or power sources and recalibrate.</p>
+      {/if}
+      {#if calibrationSourceChanged}
+        <p class="accuracy-warning">Heading source changed since calibration. Recalibrate before relying on aircraft placement.</p>
+      {/if}
       {#if isDev}
         <button class="debug-toggle" type="button" onclick={() => (debugEnabled = !debugEnabled)}>
           {debugEnabled ? 'Hide sensor data' : 'Show sensor data'}
@@ -753,6 +829,9 @@
             <div><dt>Pitch</dt><dd>{sensorReading.pitch.toFixed(1)}°</dd></div>
             <div><dt>Roll</dt><dd>{sensorReading.roll.toFixed(1)}°</dd></div>
             <div><dt>Declination</dt><dd>{sensorReading.declination.toFixed(1)}°</dd></div>
+            <div><dt>Heading source</dt><dd>{orientationSource} · {orientationDatum}</dd></div>
+            <div><dt>Compass accuracy</dt><dd>{orientationAccuracy === null ? 'unknown' : `±${orientationAccuracy.toFixed(0)}°`}</dd></div>
+            <div><dt>Raw orientation</dt><dd>{rawOrientation.alpha.toFixed(0)} / {rawOrientation.beta.toFixed(0)} / {rawOrientation.gamma.toFixed(0)}</dd></div>
             <div><dt>Worker</dt><dd>{positioningComputedAt ? 'active' : 'waiting'}</dd></div>
             <div><dt>Observer</dt><dd>{observerElevationText}</dd></div>
             <div><dt>Elevation accuracy</dt><dd>{observerElevation.accuracyMeters === null ? 'unknown' : `±${Math.round(observerElevation.accuracyMeters)}m`}</dd></div>
@@ -761,6 +840,8 @@
             {#if selectedPosition}<div><dt>Apparent target</dt><dd>{selectedPosition.elevation.toFixed(2)}°</dd></div>{/if}
           </dl>
           <button class="debug-toggle" type="button" onclick={() => (showDevHorizon = !showDevHorizon)}>{showDevHorizon ? 'Hide calibrated horizon' : 'Show calibrated horizon'}</button>
+          <button class="debug-toggle" type="button" onclick={toggleDiagnosticsRecording}>{diagnosticsRecording ? `Stop recording (${orientationDiagnostics.length})` : 'Record orientation'}</button>
+          {#if orientationDiagnostics.length}<button class="debug-toggle" type="button" onclick={exportOrientationDiagnostics}>Export orientation JSON</button>{/if}
         {/if}
       {/if}
     </section>
@@ -895,6 +976,9 @@
       gpsAccuracy={locationAccuracy}
       {aircraftPositions}
       {aircraft}
+      {orientationSource}
+      {orientationDatum}
+      {orientationAccuracy}
       onComplete={applyCalibration}
       onCancel={() => (calibrationOpen = false)}
     />

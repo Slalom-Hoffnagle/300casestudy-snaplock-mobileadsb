@@ -7,7 +7,16 @@ export type CameraOrientation = {
   headingAvailable: boolean
 }
 
-type Vector3 = { x: number; y: number; z: number }
+export type Vector3 = { x: number; y: number; z: number }
+
+export type CameraFrame = {
+  forward: Vector3
+  right: Vector3
+  up: Vector3
+  heading: number
+  elevation: number
+  roll: number
+}
 
 const EPSILON = 1e-8
 
@@ -84,4 +93,34 @@ export function deriveCameraOrientation(alpha: number, beta: number, gamma: numb
     : 0
 
   return { heading, elevation, roll, headingAvailable }
+}
+
+export function cameraFrameFromAngles(heading: number, elevation: number, roll: number): CameraFrame {
+  const headingRadians = radians(heading)
+  const elevationRadians = radians(elevation)
+  const rollRadians = radians(roll)
+  const forward = normalize({
+    x: Math.cos(elevationRadians) * Math.sin(headingRadians),
+    y: Math.cos(elevationRadians) * Math.cos(headingRadians),
+    z: Math.sin(elevationRadians),
+  })!
+  const levelRight = normalize({ x: Math.cos(headingRadians), y: -Math.sin(headingRadians), z: 0 })!
+  const levelUp = normalize(cross(levelRight, forward))!
+  const right = normalize({
+    x: levelRight.x * Math.cos(rollRadians) - levelUp.x * Math.sin(rollRadians),
+    y: levelRight.y * Math.cos(rollRadians) - levelUp.y * Math.sin(rollRadians),
+    z: levelRight.z * Math.cos(rollRadians) - levelUp.z * Math.sin(rollRadians),
+  })!
+  const up = normalize(cross(right, forward))!
+  return { forward, right, up, heading: normalizeAngle(heading), elevation, roll }
+}
+
+export function deriveAnchoredCameraFrame(
+  alpha: number,
+  beta: number,
+  gamma: number,
+  compassHeading: number,
+): CameraFrame {
+  const attitude = deriveCameraOrientation(alpha, beta, gamma)
+  return cameraFrameFromAngles(compassHeading, attitude.elevation, attitude.roll)
 }

@@ -86,7 +86,8 @@ Aviation enthusiasts, curious onlookers, and professionals frequently spot aircr
   - **Beta (β):** Front-to-back tilt (-180° to 180°). Used to determine pitch/elevation angle.
   - **Gamma (γ):** Left-to-right tilt. Used for landscape compensation.
 - Treat alpha, beta, and gamma as a coupled intrinsic Z-X′-Y″ rotation. Transform the rear camera's forward and up vectors to derive true camera azimuth, elevation, and roll; do not calculate elevation from beta alone.
-- Prefer `deviceorientationabsolute` when available and suppress relative-orientation events while fresh absolute readings are arriving.
+- On iOS/WebKit, prefer `webkitCompassHeading` as true heading and retain `webkitCompassAccuracy`. Otherwise prefer `deviceorientationabsolute`; suppress conflicting relative-orientation events while an absolute source is fresh.
+- Track heading datum explicitly. Do not apply magnetic declination to true WebKit headings; apply it exactly once to magnetic headings. Relative headings require user calibration and reduced-confidence UI.
 - Portrait is the only supported device orientation. Landscape compensation is not required.
 - On iOS 13+, explicitly request permission via `DeviceOrientationEvent.requestPermission()` before reading values.
 - Apply magnetic declination correction to convert magnetic north to true north (lookup by lat/lon using a lightweight embedded table or a public API).
@@ -127,9 +128,9 @@ Compute the great-circle bearing from user's GPS position to the aircraft's repo
 Interpolate the aircraft's current position forward from the last ADS-B ping using reported speed and heading to reduce apparent positional lag.
 
 **Step 4 — Map to screen coordinates**
-- Compute the angular difference between the aircraft's bearing and the device's compass heading (horizontal offset).
-- Compute the angular difference between the aircraft's elevation angle and the device's tilt angle (vertical offset).
-- Map these angular offsets to pixel positions using the device's estimated camera field of view (see Section 6.6).
+- Construct a portrait camera basis (`forward`, `right`, `up`) anchored to the selected true-heading source.
+- Convert aircraft bearing/apparent elevation into an ENU direction vector and project it directly onto the camera basis.
+- Use pinhole projection with the calibrated horizontal/vertical camera FOV. Roll is encoded in the camera basis; do not apply a second post-projection roll rotation.
 - Clamp off-screen aircraft to the screen edge as directional arrows.
 
 ### 6.6 Camera Field of View (FOV)
@@ -184,6 +185,9 @@ Interpolate the aircraft's current position forward from the last ADS-B ping usi
 - Aircraft alignment uses the aircraft's computed bearing/elevation from the user's location, never the aircraft's reported flight track.
 - Landmark calibration must provide manual latitude/longitude entry so map interpretation is not required.
 - Persist calibration method, offsets, quality, timestamp, and calibration location locally. Allow recalibration and independent reset.
+- Record orientation source/datum and heading polarity with calibration. A source change invalidates the calibration confidence.
+- One-reference heading alignment is unverified. Offer two-reference verification using visible references separated by 60–120°; reject opposite 180° pairs because they cannot distinguish normal from reversed heading direction.
+- Fit both normal and reversed heading models and require a maximum circular residual of 5° before marking heading verified.
 - Mark calibration stale after 24 hours; continue operating with a visible warning rather than blocking the camera.
 - Do not provide Sun alignment due to eye-safety risk.
 
