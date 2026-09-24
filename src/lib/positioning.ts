@@ -17,6 +17,10 @@ export type PositioningInput = {
     longitude: number
     heading: number
     pitch: number
+    roll?: number
+    headingOffset?: number
+    pitchOffset?: number
+    rollOffset?: number
   }
   viewport: {
     width: number
@@ -144,6 +148,9 @@ function clampToEdge(x: number, y: number, width: number, height: number) {
 
 export function calculatePositions(input: PositioningInput): PositioningOutput {
   const { user, viewport, now } = input
+  const calibratedHeading = normalizeAngle(user.heading + (user.headingOffset ?? 0))
+  const cameraElevation = 90 - user.pitch + (user.pitchOffset ?? 0)
+  const rollRadians = -((user.roll ?? 0) + (user.rollOffset ?? 0)) * Math.PI / 180
   const positions = input.aircraft
     .filter((aircraft) => (aircraft.altBaro ?? aircraft.altGeom ?? 0) > 0)
     .map((aircraft) => {
@@ -152,12 +159,13 @@ export function calculatePositions(input: PositioningInput): PositioningOutput {
       const bearing = bearingBetween(user.latitude, user.longitude, current.latitude, current.longitude)
       const altitude = aircraft.altBaro ?? aircraft.altGeom ?? 0
       const elevation = elevationAngle(distance, altitude)
-      const horizontalOffset = signedAngleDifference(bearing, user.heading)
-      const verticalOffset = elevation - (90 - user.pitch)
-      const x = viewport.width / 2 + horizontalOffset / viewport.horizontalFov * viewport.width
-      const y = viewport.height / 2 - verticalOffset / viewport.verticalFov * viewport.height
-      const inFov = Math.abs(horizontalOffset) <= viewport.horizontalFov / 2
-        && Math.abs(verticalOffset) <= viewport.verticalFov / 2
+      const horizontalOffset = signedAngleDifference(bearing, calibratedHeading)
+      const verticalOffset = elevation - cameraElevation
+      const projectedX = horizontalOffset / viewport.horizontalFov * viewport.width
+      const projectedY = -verticalOffset / viewport.verticalFov * viewport.height
+      const x = viewport.width / 2 + projectedX * Math.cos(rollRadians) - projectedY * Math.sin(rollRadians)
+      const y = viewport.height / 2 + projectedX * Math.sin(rollRadians) + projectedY * Math.cos(rollRadians)
+      const inFov = x >= 0 && x <= viewport.width && y >= 0 && y <= viewport.height
       const edge = clampToEdge(x, y, viewport.width, viewport.height)
       const distanceScale = Math.max(0.55, Math.min(1, 1 - distance / 100))
 

@@ -26,6 +26,12 @@ Polling is single-flight: a new request cannot overlap an active request. It pau
 
 The ready state adds a device-pixel-ratio-aware canvas above the camera. In-frame aircraft render as animated targeting reticles with callsign/elevation labels; the six nearest off-screen aircraft render as directional edge arrows. The canvas uses `requestAnimationFrame`, clears on every frame, and pauses when the page is hidden.
 
+## Sensor Calibration
+
+Open **Settings → Calibrate sensors** after enabling camera, location, and motion. Horizon alignment is optional. Heading can use the automatic corrected compass or be refined against a visible tracked aircraft, the Moon, a map-selected landmark, or a known true bearing. Calibration offsets and quality are stored locally and can be reset independently from display settings.
+
+Landmark calibration loads Leaflet only when opened and displays OpenStreetMap attribution on the map. Moon calibration uses SunCalc locally; no location or calibration data is sent to either library.
+
 ## Development
 
 Requires Node.js 20.19+ or 22.12+.

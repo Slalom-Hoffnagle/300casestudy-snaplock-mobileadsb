@@ -8,7 +8,15 @@
     type SensorReading,
   } from './lib/sensors'
   import { AdsbError, fetchNearbyAircraft, type Aircraft } from './lib/adsb'
-  import type { AircraftPosition, PositioningInput } from './lib/positioning'
+  import { haversineDistance, type AircraftPosition, type PositioningInput } from './lib/positioning'
+  import CalibrationFlow from './lib/calibration/CalibrationFlow.svelte'
+  import {
+    CALIBRATION_STORAGE_KEY,
+    DEFAULT_CALIBRATION,
+    calibrationIsStale,
+    parseCalibration,
+    type SensorCalibration,
+  } from './lib/calibration'
 
   type AppPhase = 'welcome' | 'camera' | 'location' | 'motion' | 'ready' | 'denied'
 
@@ -51,6 +59,8 @@
   let selectedAircraft: Aircraft | null = null
   let selectedPosition: AircraftPosition | null = null
   let settingsOpen = false
+  let calibrationOpen = false
+  let calibration: SensorCalibration = { ...DEFAULT_CALIBRATION }
   let settings = {
     radiusNm: 50,
     distanceUnit: 'nm',
@@ -65,6 +75,10 @@
   $: adsbIsStale = lastAdsbUpdate !== null && currentTime - lastAdsbUpdate > 15000
   $: adsbAgeSeconds = lastAdsbUpdate === null ? null : Math.max(0, Math.floor((currentTime - lastAdsbUpdate) / 1000))
   $: inFovCount = aircraftPositions.filter((position) => position.inFov).length
+  $: calibrationLocationStale = calibration.latitude !== null && calibration.longitude !== null && latitude !== null && longitude !== null
+    ? haversineDistance(calibration.latitude, calibration.longitude, latitude, longitude) > 50
+    : false
+  $: calibrationStale = calibrationIsStale(calibration, currentTime) || calibrationLocationStale
 
   function loadSettings() {
     try {
@@ -76,6 +90,27 @@
     } catch {
       // Ignore malformed local settings and keep defaults.
     }
+  }
+
+  function loadCalibration() {
+    const stored = parseCalibration(localStorage.getItem(CALIBRATION_STORAGE_KEY))
+    if (stored) calibration = stored
+  }
+
+  function applyCalibration(nextCalibration: SensorCalibration) {
+    calibration = nextCalibration
+    localStorage.setItem(CALIBRATION_STORAGE_KEY, JSON.stringify(nextCalibration))
+    calibrationOpen = false
+  }
+
+  function resetCalibration() {
+    calibration = { ...DEFAULT_CALIBRATION }
+    localStorage.removeItem(CALIBRATION_STORAGE_KEY)
+  }
+
+  function openCalibration() {
+    settingsOpen = false
+    calibrationOpen = true
   }
 
   function saveSettings() {
@@ -314,6 +349,10 @@
         longitude,
         heading: sensorReading.heading,
         pitch: sensorReading.pitch,
+        roll: sensorReading.roll,
+        headingOffset: calibration.headingOffset,
+        pitchOffset: calibration.pitchOffset,
+        rollOffset: calibration.rollOffset,
       },
       viewport: {
         width: window.innerWidth,
@@ -504,7 +543,10 @@
     stopOverlay()
   })
 
-  onMount(loadSettings)
+  onMount(() => {
+    loadSettings()
+    loadCalibration()
+  })
   document.addEventListener('visibilitychange', handleVisibilityChange)
 </script>
 
@@ -557,6 +599,7 @@
         <span><i class:active={locationAccuracy !== null}></i> GPS {locationAccuracy ? `${Math.round(locationAccuracy)}m` : 'locating'}</span>
         <span><i class:active={adsbState === 'fresh' && !adsbIsStale}></i> ADS-B {adsbState === 'loading' ? 'loading' : `${aircraft.length} nearby`}</span>
         <span><i class:active={positioningComputedAt !== null}></i> View {inFovCount} in frame</span>
+        <span><i class:active={calibration.quality !== 'uncalibrated' && !calibrationStale}></i> Calibration {calibrationStale ? 'stale' : calibration.quality}</span>
       </div>
       {#if adsbIsStale}
         <p class="data-warning">ADS-B data is {adsbAgeSeconds}s old. Showing the last successful result.</p>
@@ -677,8 +720,30 @@
           <div class="setting-label"><span>Vertical FOV</span><strong>{settings.verticalFov}°</strong></div>
           <input type="range" min="30" max="60" step="1" bind:value={settings.verticalFov} oninput={saveSettings} />
         </div>
+        <div class="calibration-settings">
+          <div class="setting-label"><span>Sensor calibration</span><strong>{calibrationStale ? 'Stale' : calibration.quality}</strong></div>
+          <p>{calibration.calibratedAt ? `${calibration.method} · heading ${calibration.headingOffset.toFixed(1)}° · pitch ${calibration.pitchOffset.toFixed(1)}°` : 'Using automatic corrected compass heading.'}</p>
+          <button class="primary-action" type="button" disabled={appPhase !== 'ready'} onclick={openCalibration}>{calibration.calibratedAt ? 'Recalibrate sensors' : 'Calibrate sensors'}</button>
+          {#if calibration.calibratedAt}
+            <button class="reset-action" type="button" onclick={resetCalibration}>Reset calibration</button>
+          {/if}
+          {#if appPhase !== 'ready'}<small>Enable sensors before calibration.</small>{/if}
+        </div>
         <p class="settings-note">Adjust FOV until a known landmark lines up with the camera view.</p>
       </div>
     </div>
+  {/if}
+
+  {#if calibrationOpen}
+    <CalibrationFlow
+      {sensorReading}
+      {latitude}
+      {longitude}
+      gpsAccuracy={locationAccuracy}
+      {aircraftPositions}
+      {aircraft}
+      onComplete={applyCalibration}
+      onCancel={() => (calibrationOpen = false)}
+    />
   {/if}
 </main>

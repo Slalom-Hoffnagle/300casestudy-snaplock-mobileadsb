@@ -85,6 +85,8 @@ Aviation enthusiasts, curious onlookers, and professionals frequently spot aircr
 - On iOS 13+, explicitly request permission via `DeviceOrientationEvent.requestPermission()` before reading values.
 - Apply magnetic declination correction to convert magnetic north to true north (lookup by lat/lon using a lightweight embedded table or a public API).
 - Smooth orientation readings with a low-pass filter to reduce jitter.
+- Apply persisted heading, pitch, and roll calibration offsets after smoothing and before aircraft positioning.
+- Calibration is optional; declination-corrected device heading remains available without manual setup.
 
 ### 6.4 ADS-B Data Integration
 - Fetch real-time ADS-B aircraft data from a supported public API (see Section 9).
@@ -161,6 +163,21 @@ Interpolate the aircraft's current position forward from the last ADS-B ping usi
 - ADS-B API source selection (if multiple are configured)
 - Toggle: show all nearby aircraft on a mini-map inset
 
+### 6.11 Sensor Calibration
+- Use a two-stage guided flow: optional horizon alignment followed by heading-method selection.
+- Horizon alignment uses a fixed high-contrast line and stable sensor sample window to capture pitch and roll offsets. Users may skip when no horizon is visible.
+- Heading methods must include:
+  - Automatic declination-corrected device compass
+  - Alignment to a visually identified ADS-B aircraft
+  - Alignment to the Moon's calculated azimuth/elevation
+  - Alignment to a map-selected visible landmark
+  - Manual entry of a known true bearing
+- Aircraft alignment uses the aircraft's computed bearing/elevation from the user's location, never the aircraft's reported flight track.
+- Landmark calibration must provide manual latitude/longitude entry so map interpretation is not required.
+- Persist calibration method, offsets, quality, timestamp, and calibration location locally. Allow recalibration and independent reset.
+- Mark calibration stale after 24 hours; continue operating with a visible warning rather than blocking the camera.
+- Do not provide Sun alignment due to eye-safety risk.
+
 ---
 
 ## 7. Non-Functional Requirements
@@ -222,8 +239,8 @@ Interpolate the aircraft's current position forward from the last ADS-B ping usi
 - **Rendering:** HTML5 Canvas overlay on top of a `<video>` element for marker drawing. CSS transitions for the detail sheet.
 - **State management:** Reactive store pattern (Svelte stores or a small hand-rolled observable).
 - **Computation:** Positioning math runs in a dedicated Web Worker to keep the main thread free for rendering.
-- **No backend required.** adsb.fi is keyless — the app is a pure static site; no serverless functions or API proxy needed.
-- **Deployment:** Vercel (static site). Connect GitHub repo → Vercel project; every push to `main` deploys automatically. HTTPS is provided by Vercel by default, satisfying all browser sensor API requirements. No Vercel environment variables needed for v1.
+- **Minimal backend proxy required.** Browser CORS restrictions prevent direct reads from adsb.fi. A same-origin Vercel function validates the query, applies a short cache, and proxies the response without storing location data.
+- **Deployment:** Vercel. Connect GitHub repo → Vercel project; every push to `main` deploys the Vite client and `/api/adsb` function automatically. HTTPS is provided by Vercel by default, satisfying all browser sensor API requirements. No Vercel environment variables are needed for v1.
 
 ---
 
@@ -247,7 +264,7 @@ GET https://opendata.adsb.fi/api/v3/lat/47.6062/lon/-122.3321/dist/50
 ```
 
 **Implementation notes:**
-- The 5-second polling interval is well within the 1 req/sec rate limit.
+- The 3-second single-flight polling interval is within the 1 req/sec rate limit. Polling pauses while the page is hidden and uses exponential backoff after failures.
 - The `dist` parameter is in nautical miles (integer); cap to the user's configured max radius (default 50nm, max 250nm).
 - Response fields include: `hex` (ICAO24), `flight` (callsign), `lat`, `lon`, `alt_baro`, `alt_geom`, `gs` (ground speed), `track`, `t` (aircraft type), `r` (registration), `desc` (aircraft description), and more.
 - **Citation requirement:** The app footer and about screen must include "Flight data provided by [adsb.fi](https://adsb.fi)" as required by their terms.
@@ -286,8 +303,8 @@ GET https://opendata.adsb.fi/api/v3/lat/47.6062/lon/-122.3321/dist/50
 ## 12. Privacy & Data Handling
 
 - **No analytics, no tracking, no accounts** in v1.
-- User GPS coordinates are used exclusively for ADS-B bounding box queries and local computation; they are not logged, stored, or sent to any first-party service.
-- ADS-B API calls transmit only a bounding box derived from the user's position (±radius), not the precise coordinate.
+- User GPS coordinates are used for local computation and transient same-origin ADS-B proxy queries; the proxy does not log or persist them.
+- ADS-B proxy calls round coordinates to four decimal places and forward only the location/radius required by the upstream endpoint.
 - No cookies beyond session state.
 - If a third-party ADS-B API's terms require disclosure, surface a one-time notice on first use.
 
@@ -409,7 +426,7 @@ GET https://opendata.adsb.fi/api/v3/lat/47.6062/lon/-122.3321/dist/50
 
 ## 16. Open Questions
 
-1. **FOV calibration UX** — What's the simplest in-app flow for a user to calibrate their specific phone's camera FOV without requiring a known landmark?
+1. ~~**Sensor calibration UX**~~ — ✅ Resolved: optional horizon alignment followed by automatic, aircraft, Moon, map-landmark, or known-bearing heading calibration. FOV remains adjustable with horizontal/vertical sliders.
 2. ~~**ADS-B Exchange API key distribution**~~ — ✅ Resolved: adsb.fi requires no API key. Pure static Vercel deploy, no proxy needed.
 3. **Magnetic declination source** — Use a bundled static lookup table (simpler, offline) or hit a live API (more accurate)?
 4. **Minimum aircraft distance cutoff** — Should we exclude aircraft farther than X nautical miles from FOV matching to reduce false positives? (Proposed default: 100nm.)
