@@ -771,16 +771,17 @@
 
   <header class="app-header">
     <div class="brand-stack">
-      <a class="brand" href="/" aria-label="SnapLock home">
+      <div class="brand" aria-label="SnapLock brand">
         <img src="/snaplock-mark.svg" width="36" height="36" alt="" />
         <span>SnapLock</span>
-      </a>
+      </div>
       <div class="status-panel">
         <button class="status-toggle" type="button" aria-expanded={statusOpen} onclick={() => (statusOpen = !statusOpen)}>
           <span class="status-indicator" aria-hidden="true"></span>
           <span>Status</span>
         </button>
         {#if statusOpen}
+          <button class="status-backdrop" type="button" aria-label="Close status panel" onclick={() => (statusOpen = false)}></button>
           <div class="status-popover" role="dialog" aria-label="Status details">
             {#each statusItems as item}
               <div class="status-entry">
