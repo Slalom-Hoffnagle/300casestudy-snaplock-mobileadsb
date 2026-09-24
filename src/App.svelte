@@ -75,6 +75,7 @@
   let selectedPosition: AircraftPosition | null = null
   let settingsOpen = false
   let calibrationOpen = false
+  let statusOpen = false
   let calibration: SensorCalibration = { ...DEFAULT_CALIBRATION }
   let terrainElevation: TerrainElevationFix | null = null
   let terrainElevationError = ''
@@ -103,7 +104,7 @@
     markerY: number | null
   }> = []
   let settings = {
-    radiusNm: 50,
+    radiusNm: 10,
     distanceUnit: 'nm',
     altitudeUnit: 'ft',
     horizontalFov: 60,
@@ -640,7 +641,7 @@
     context.fillStyle = '#ffffff'
     context.font = '700 11px "Avenir Next", sans-serif'
     context.textAlign = 'center'
-    context.fillText(`${position.callsign}  ${Math.round(position.elevation)}°`, 0, -half - 9)
+    context.fillText(`${position.callsign}  ${position.distance.toFixed(1)} nm`, 0, -half - 9)
     context.restore()
   }
 
@@ -791,14 +792,22 @@
     </section>
   {:else if appPhase === 'ready'}
     <section class="viewfinder live-view" aria-labelledby="live-title">
-      <div class="sensor-readout">
-        <span><i class:active={orientationAvailable}></i> Motion {orientationAvailable ? 'ready' : 'unavailable'}</span>
-        <span><i class:active={orientationDatum !== 'relative' && orientationDatum !== 'unknown'}></i> Heading {orientationSource}</span>
-        <span><i class:active={locationAccuracy !== null}></i> GPS {locationAccuracy ? `${Math.round(locationAccuracy)}m` : 'locating'}</span>
-        <span><i class:active={adsbState === 'fresh' && !adsbIsStale}></i> ADS-B {adsbState === 'loading' ? 'loading' : `${aircraft.length} nearby`}</span>
-        <span><i class:active={positioningComputedAt !== null}></i> View {inFovCount} in frame</span>
-        <span><i class:active={calibration.quality !== 'uncalibrated' && !calibrationStale && !calibrationSourceChanged}></i> Calibration {calibrationSourceChanged ? 'source changed' : calibrationStale ? 'stale' : calibration.quality}</span>
-        <span><i class:active={observerElevation.source !== 'unavailable'}></i> Elevation {observerElevation.source}</span>
+      <div class="status-panel">
+        <button class="status-toggle" type="button" aria-expanded={statusOpen} onclick={() => (statusOpen = !statusOpen)}>
+          <span class="status-indicator" aria-hidden="true"></span>
+          <span>Status</span>
+        </button>
+        {#if statusOpen}
+          <div class="sensor-readout">
+            <span><i class:active={orientationAvailable}></i> Motion {orientationAvailable ? 'ready' : 'unavailable'}</span>
+            <span><i class:active={orientationDatum !== 'relative' && orientationDatum !== 'unknown'}></i> Heading {orientationSource}</span>
+            <span><i class:active={locationAccuracy !== null}></i> GPS {locationAccuracy ? `${Math.round(locationAccuracy)}m` : 'locating'}</span>
+            <span><i class:active={adsbState === 'fresh' && !adsbIsStale}></i> ADS-B {adsbState === 'loading' ? 'loading' : `${aircraft.length} nearby`}</span>
+            <span><i class:active={positioningComputedAt !== null}></i> View {inFovCount} in frame</span>
+            <span><i class:active={calibration.quality !== 'uncalibrated' && !calibrationStale && !calibrationSourceChanged}></i> Calibration {calibrationSourceChanged ? 'source changed' : calibrationStale ? 'stale' : calibration.quality}</span>
+            <span><i class:active={observerElevation.source !== 'unavailable'}></i> Elevation {observerElevation.source}</span>
+          </div>
+        {/if}
       </div>
       {#if adsbIsStale}
         <p class="data-warning">ADS-B data is {adsbAgeSeconds}s old. Showing the last successful result.</p>
@@ -876,16 +885,11 @@
             <div><span>Altitude</span><strong>{formatAltitude(selectedAircraft.altBaro ?? selectedAircraft.altGeom)}</strong></div>
             <div><span>Speed</span><strong>{formatSpeed(selectedAircraft.groundSpeed)}</strong></div>
             <div><span>Heading</span><strong>{selectedAircraft.track === null ? 'Unavailable' : `${Math.round(selectedAircraft.track)}°`}</strong></div>
+            <div><span>Distance</span><strong>{selectedPosition ? `${selectedPosition.distance.toFixed(1)} nm` : 'Unknown'}</strong></div>
             <div><span>Last update</span><strong>{adsbAgeSeconds === null ? 'Unknown' : `${adsbAgeSeconds}s ago`}</strong></div>
             <div><span>Apparent elevation</span><strong>{selectedPosition ? `${selectedPosition.elevation.toFixed(1)}°` : 'Unavailable'}</strong></div>
             <div><span>Vertical confidence</span><strong>{selectedPosition?.verticalConfidence ?? 'Unavailable'}</strong></div>
           </div>
-          <div class="route-line">
-            <span>{selectedAircraft.origin ?? 'Unknown origin'}</span>
-            <b>→</b>
-            <span>{selectedAircraft.destination ?? 'Unknown destination'}</span>
-          </div>
-          <a class="tracker-link" href={`https://adsb.fi/aircraft/${selectedAircraft.icao24}`} target="_blank" rel="noreferrer">Open on adsb.fi <span aria-hidden="true">↗</span></a>
           {#if selectedPosition?.nearHorizon}<p class="detail-warning">Near-horizon placement is uncertain due to altitude and atmospheric variation. Terrain occlusion is not modeled.</p>{/if}
         {:else}
           <div class="direction-facts">
@@ -941,7 +945,6 @@
         </div>
         <div class="elevation-settings">
           <div class="setting-label"><span>Observer elevation</span><strong>{observerElevationText}</strong></div>
-          <p>Automatic mode prefers accurate GPS altitude, then cached Copernicus terrain elevation.</p>
           <label class="setting-row">
             <span>Manual MSL elevation ({settings.altitudeUnit === 'ft' ? 'feet' : 'meters'})</span>
             <input type="number" step="1" value={manualElevationDisplay} placeholder="Automatic" onchange={setManualElevation} />
@@ -958,7 +961,6 @@
           {/if}
           {#if appPhase !== 'ready'}<small>Enable sensors before calibration.</small>{/if}
         </div>
-        <p class="settings-note">Adjust FOV until a known landmark lines up with the camera view.</p>
         <div class="settings-attribution">
           <a href="https://adsb.fi" target="_blank" rel="noreferrer">Flight data by adsb.fi</a>
           <a href="https://open-meteo.com/" target="_blank" rel="noreferrer">Terrain by Open-Meteo / Copernicus</a>

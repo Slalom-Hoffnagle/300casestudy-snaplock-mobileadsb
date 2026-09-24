@@ -16,7 +16,7 @@ Aircraft direction vectors are projected directly through the camera's orthonorm
 
 ## M4 ADS-B Data
 
-The live view polls the same-origin `/api/adsb` endpoint every three seconds using a 50 nautical mile radius, normalizes aircraft records, and logs the parsed count in development builds. The endpoint proxies adsb.fi server-side because the upstream API does not allow direct browser CORS requests. It validates coordinates, caps the radius at 250 nautical miles, times out upstream requests after eight seconds, and caches identical results for 2.5 seconds.
+The live view polls the same-origin `/api/adsb` endpoint every three seconds using a default 10 nautical mile radius, configurable in Settings, normalizes aircraft records, and logs the parsed count in development builds. The endpoint proxies adsb.fi server-side because the upstream API does not allow direct browser CORS requests. It validates coordinates, caps the radius at 250 nautical miles, times out upstream requests after eight seconds, and caches identical results for 2.5 seconds.
 
 Polling is single-flight: a new request cannot overlap an active request. It pauses when the tab is hidden, aborts the active request, and resumes when the app becomes visible. Failed requests use exponential backoff, including longer retry delays for HTTP 429 responses. Results older than 15 seconds remain visible with a staleness warning.
 

@@ -97,7 +97,7 @@ Aviation enthusiasts, curious onlookers, and professionals frequently spot aircr
 
 ### 6.4 ADS-B Data Integration
 - Fetch real-time ADS-B aircraft data from a supported public API (see Section 9).
-- Query for all aircraft within a configurable radius (default: 50 nautical miles) of the user's GPS position.
+- Query for all aircraft within a configurable radius (default: 10 nautical miles) of the user's GPS position.
 - Refresh interval: every 3 seconds.
 - Each aircraft record must include at minimum:
   - ICAO24 hex identifier
@@ -278,7 +278,7 @@ GET https://opendata.adsb.fi/api/v3/lat/47.6062/lon/-122.3321/dist/50
 
 **Implementation notes:**
 - The 3-second single-flight polling interval is within the 1 req/sec rate limit. Polling pauses while the page is hidden and uses exponential backoff after failures.
-- The `dist` parameter is in nautical miles (integer); cap to the user's configured max radius (default 50nm, max 250nm).
+- The `dist` parameter is in nautical miles (integer); cap to the user's configured max radius (default 10nm, max 250nm).
 - Response fields include: `hex` (ICAO24), `flight` (callsign), `lat`, `lon`, `alt_baro`, `alt_geom`, `gs` (ground speed), `track`, `t` (aircraft type), `r` (registration), `desc` (aircraft description), and more.
 - **Citation requirement:** The app footer and about screen must include "Flight data provided by [adsb.fi](https://adsb.fi)" as required by their terms.
 - No `AdsbProvider` abstraction layer needed in v1 given single source; add the interface in v2 if multi-source support is desired.

@@ -13,7 +13,7 @@ export default defineConfig({
           const query = new URL(path, 'http://localhost').searchParams
           const lat = query.get('lat') ?? ''
           const lon = query.get('lon') ?? ''
-          const dist = query.get('dist') ?? '50'
+          const dist = query.get('dist') ?? '10'
           return `/api/v3/lat/${lat}/lon/${lon}/dist/${dist}`
         },
       },
