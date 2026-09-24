@@ -143,6 +143,15 @@
     : settings.altitudeUnit === 'ft'
       ? String(Math.round(settings.manualElevationMeters / 0.3048))
       : String(Math.round(settings.manualElevationMeters))
+  $: statusItems = [
+    { label: 'Motion', value: orientationAvailable ? 'ready' : 'unavailable', active: orientationAvailable },
+    { label: 'Heading', value: orientationSource === 'unavailable' ? 'unavailable' : orientationSource, active: orientationDatum !== 'relative' && orientationDatum !== 'unknown' },
+    { label: 'GPS', value: locationAccuracy ? `${Math.round(locationAccuracy)}m` : 'locating', active: locationAccuracy !== null },
+    { label: 'ADS-B', value: adsbState === 'loading' ? 'loading' : `${aircraft.length} nearby`, active: adsbState === 'fresh' && !adsbIsStale },
+    { label: 'View', value: `${inFovCount} in frame`, active: positioningComputedAt !== null },
+    { label: 'Calibration', value: calibrationSourceChanged ? 'source changed' : calibrationStale ? 'stale' : calibration.quality, active: calibration.quality !== 'uncalibrated' && !calibrationStale && !calibrationSourceChanged },
+    { label: 'Elevation', value: observerElevation.source, active: observerElevation.source !== 'unavailable' },
+  ]
   $: effectiveFov = effectiveCoverFov(
     { horizontal: settings.horizontalFov, vertical: settings.verticalFov },
     cameraWidth,
@@ -798,14 +807,13 @@
           <span>Status</span>
         </button>
         {#if statusOpen}
-          <div class="sensor-readout">
-            <span><i class:active={orientationAvailable}></i> Motion {orientationAvailable ? 'ready' : 'unavailable'}</span>
-            <span><i class:active={orientationDatum !== 'relative' && orientationDatum !== 'unknown'}></i> Heading {orientationSource}</span>
-            <span><i class:active={locationAccuracy !== null}></i> GPS {locationAccuracy ? `${Math.round(locationAccuracy)}m` : 'locating'}</span>
-            <span><i class:active={adsbState === 'fresh' && !adsbIsStale}></i> ADS-B {adsbState === 'loading' ? 'loading' : `${aircraft.length} nearby`}</span>
-            <span><i class:active={positioningComputedAt !== null}></i> View {inFovCount} in frame</span>
-            <span><i class:active={calibration.quality !== 'uncalibrated' && !calibrationStale && !calibrationSourceChanged}></i> Calibration {calibrationSourceChanged ? 'source changed' : calibrationStale ? 'stale' : calibration.quality}</span>
-            <span><i class:active={observerElevation.source !== 'unavailable'}></i> Elevation {observerElevation.source}</span>
+          <div class="status-popover" role="dialog" aria-label="Status details">
+            {#each statusItems as item}
+              <div class="status-entry">
+                <span class="status-entry-label">{item.label}</span>
+                <span class:active={item.active} class="status-entry-value">{item.value}</span>
+              </div>
+            {/each}
           </div>
         {/if}
       </div>
